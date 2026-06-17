@@ -49,24 +49,6 @@
     <p>Decode &amp; generate Flipper Zero <code>.sub</code> files for Retekess T119 / TD157 / TD165 / TD174 pagers.</p>
   </header>
 
-  <article id="model-pane" class="purple-theme">
-    <header><h3>DEVICE &nbsp;(for generation)</h3></header>
-    <div class="grid">
-      <div></div>
-      <div>
-        <label for="model-select">Pager model:</label>
-        <select id="model-select" onchange="selectModel()">
-          <option value="t119">Retekess T119</option>
-          <option value="td157">Retekess TD157</option>
-          <option value="td165">Retekess TD165</option>
-          <option value="td174">Retekess TD174</option>
-        </select>
-      </div>
-      <div></div>
-    </div>
-    <footer id="model-info">Select the pager model. All panes below adapt to it.</footer>
-  </article>
-
   <!-- ============ DECODE ============ -->
   <article id="signal-pane" class="orange-theme">
     <header><h3>DECODE &nbsp;(signal &#8594; numbers, all models)</h3></header>
@@ -96,6 +78,25 @@
       <br><small>Real pager capacity: T119 1–999 · TD157 1–998 · TD165 1–999 · TD174 1–10.
       Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — pick your physical model.</small>
     </footer>
+  </article>
+
+  <!-- ============ DEVICE (for generation) ============ -->
+  <article id="model-pane" class="purple-theme">
+    <header><h3>DEVICE &nbsp;(for generation)</h3></header>
+    <div class="grid">
+      <div></div>
+      <div>
+        <label for="model-select">Pager model:</label>
+        <select id="model-select" onchange="selectModel()">
+          <option value="t119">Retekess T119</option>
+          <option value="td157">Retekess TD157</option>
+          <option value="td165">Retekess TD165</option>
+          <option value="td174">Retekess TD174</option>
+        </select>
+      </div>
+      <div></div>
+    </div>
+    <footer id="model-info">Select the pager model for the generators below. All generator panes adapt to it.</footer>
   </article>
 
   <!-- ============ KEY FILE ============ -->
@@ -172,12 +173,22 @@
   <article id="special-pane" class="green-theme">
     <header><h3 id="special-title">SPECIAL FILE</h3></header>
     <div class="grid">
-      <div></div>
       <div>
         <label for="s-station">Station:</label>
         <input type="number" id="s-station" min="0">
-        <button id="special-download" onclick="genSpecialFile()">Generate &amp; download</button>
       </div>
+      <div>
+        <label for="s-pager">Pager (fixed):</label>
+        <input id="s-pager" disabled>
+      </div>
+      <div>
+        <label for="s-action">Action (fixed):</label>
+        <input id="s-action" disabled>
+      </div>
+    </div>
+    <div class="grid">
+      <div></div>
+      <button id="special-download" onclick="genSpecialFile()">Generate &amp; download</button>
       <div></div>
     </div>
     <textarea class="preview hidden" id="special-preview" readonly></textarea>
@@ -250,7 +261,8 @@
       actionOptions: [{ value: '0', label: 'Ring (0)' }, { value: '1', label: 'Mute (1)' }],
       actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
       validActions: [0, 1], // 1-bit field: every value is valid
-      special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
+      special: { label: 'TURN-OFF FILE', suffix: 'turnoff', pager: 1005, action: 0,
+                 pagerText: '1005  (reserved "all pagers" broadcast)', actionText: '0  (irrelevant)',
                  info: 'Turns off every pager on the station. The trigger is a reserved broadcast address (pager 1005 — above the normal 1–999 range, meaning "all pagers"); the action bit is irrelevant here.' },
       decode: function (bin) {
         return {
@@ -266,7 +278,7 @@
         var bin = encManchester(reverse(decToBin(s, 13)) + reverse(decToBin(p, 10)) + reverse(decToBin(action, 1)), 0);
         return genRawData(200, 600, repeats, bin) + genRawData(300, 800, repeats, bin);
       },
-      specialKey: function (station) { return this.keyHex(station, 1005, 0); }
+      specialKey: function (station) { return this.keyHex(station, this.special.pager, this.special.action); }
     },
 
     td157: {
@@ -281,7 +293,8 @@
         return bits === '0010' ? 'Call (0010)' : bits === '1111' ? 'Turn-off (1111)' : 'bits ' + bits;
       },
       validActions: ['0010', '1111'], // only call + turn-off are real of the 16 combos
-      special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
+      special: { label: 'TURN-OFF FILE', suffix: 'turnoff', pager: 999, action: '1111',
+                 pagerText: '999', actionText: '1111  (turn-off action)',
                  info: 'Turns off every pager on the station. Here the trigger is a dedicated turn-off action (1111) — different from the normal call action (0010) — sent to pager 999.' },
       decode: function (bin) {
         return {
@@ -297,7 +310,7 @@
         var bin = encManchester(decToBin(s, 10) + decToBin(p, 10) + this.keyAction, 0);
         return genRawData(200, 600, repeats, bin);
       },
-      specialKey: function (station) { return this.keyHex(station, 999, this.turnoffAction); }
+      specialKey: function (station) { return this.keyHex(station, this.special.pager, this.special.action); }
     },
 
     td165: {
@@ -308,7 +321,8 @@
       actionOptions: [{ value: '0', label: 'Ring (0)' }, { value: '1', label: 'Mute (1)' }],
       actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
       validActions: [0, 1], // 1-bit field: every value is valid
-      special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
+      special: { label: 'TURN-OFF FILE', suffix: 'turnoff', pager: 1005, action: 0,
+                 pagerText: '1005  (reserved "all pagers" broadcast)', actionText: '0  (irrelevant)',
                  info: 'Turns off every pager on the station. The trigger is a reserved broadcast address (pager 1005 — above the normal 1–999 range, meaning "all pagers"); the action bit is irrelevant here.' },
       decode: function (bin) {
         return {
@@ -324,7 +338,7 @@
         var bin = encManchester(reverse(decToBin(s, 13)) + reverse(decToBin(p, 10)) + reverse(decToBin(action, 1)), 0);
         return genRawData(200, 600, repeats, bin) + genRawData(300, 800, repeats, bin);
       },
-      specialKey: function (station) { return this.keyHex(station, 1005, 0); }
+      specialKey: function (station) { return this.keyHex(station, this.special.pager, this.special.action); }
     },
 
     td174: {
@@ -336,7 +350,8 @@
       actionOptions: [{ value: '0', label: 'Call / Page (0)' }],
       actionName: function (a) { return a == 3 ? 'Desync (3)' : a == 0 ? 'Call (0)' : 'action ' + a; },
       validActions: [0, 3], // of 0-3, only call (0) and desync (3) are real
-      special: { label: 'DESYNC FILE', suffix: 'desync',
+      special: { label: 'DESYNC FILE', suffix: 'desync', pager: 237, action: 3,
+                 pagerText: '237', actionText: '3  (desync action)',
                  info: 'Desync command for the station. The trigger is a dedicated desync action (3) — different from the normal call action (0) — sent to pager 237.' },
       decode: function (bin) {
         return {
@@ -353,7 +368,7 @@
         var bin = '01' + encManchester(reverse(decToBin(s, 13)) + reverse(decToBin(0, 2)) + reverse(decToBin(p, 8)), 0);
         return genRawData(300, 900, repeats, bin);
       },
-      specialKey: function (station) { return this.keyHex(station, 237, 3); }
+      specialKey: function (station) { return this.keyHex(station, this.special.pager, this.special.action); }
     }
   };
 
@@ -393,9 +408,11 @@
     setRange('r-pager-from', r.pager); setRange('r-pager-to', r.pager);
     if (current.hasAction) { setRange('k-action', r.action); setRange('r-action', r.action); }
 
-    // special pane labels
+    // special pane labels + fixed (read-only) pager/action shown for clarity
     document.getElementById('special-title').textContent = current.special.label;
     document.getElementById('special-info').textContent = current.special.info;
+    document.getElementById('s-pager').value = current.special.pagerText;
+    document.getElementById('s-action').value = current.special.actionText;
     document.getElementById('model-info').innerHTML =
       '<strong>' + current.name + '</strong> — ' + current.protocol + ' · Bit ' + current.bit +
       ' · TE ' + current.te + ' · ' + (current.freq / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz';
