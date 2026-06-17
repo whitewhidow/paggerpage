@@ -47,7 +47,7 @@
   </header>
 
   <article id="model-pane" class="purple-theme">
-    <header><h3>DEVICE</h3></header>
+    <header><h3>DEVICE &nbsp;(for generation)</h3></header>
     <div class="grid">
       <div></div>
       <div>
@@ -66,22 +66,24 @@
 
   <!-- ============ DECODE ============ -->
   <article id="signal-pane" class="orange-theme">
-    <header><h3>DECODE &nbsp;(signal &#8594; numbers)</h3></header>
+    <header><h3>DECODE &nbsp;(signal &#8594; numbers, all models)</h3></header>
     <div class="grid">
       <div></div>
       <div>
         <label for="hex-key">Hex key:</label>
-        <input name="hex-key" id="hex-key" placeholder="00AABB" minlength="6" maxlength="6">
+        <input name="hex-key" id="hex-key" placeholder="00AABB" minlength="6" maxlength="6" oninput="decode()">
       </div>
       <div></div>
     </div>
-    <div class="grid">
-      <div></div>
-      <button onclick="decode()">Decode &#8595;</button>
-      <div></div>
+    <div id="decode-results" class="hidden">
+      <table id="decode-table">
+        <thead>
+          <tr><th>Model</th><th>Station</th><th>Pager</th><th>Action</th><th></th></tr>
+        </thead>
+        <tbody id="decode-tbody"></tbody>
+      </table>
     </div>
-    <div id="decode-readout" class="readout hidden"></div>
-    <footer>Paste the hex key you captured from the read. The numbers fill the generators below.</footer>
+    <footer>Paste the hex key once — it's decoded under every model's format at the same time. Hit <strong>Use</strong> on a row to load those numbers into the generators below.</footer>
   </article>
 
   <!-- ============ KEY FILE ============ -->
@@ -358,8 +360,8 @@
       '<strong>' + current.name + '</strong> — ' + current.protocol + ' · Bit ' + current.bit +
       ' · TE ' + current.te + ' · ' + (current.freq / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz';
 
-    // clear previews
-    ['decode-readout', 'key-preview', 'raw-preview', 'special-preview'].forEach(function (eid) {
+    // clear generator previews (the decode table is model-independent, leave it)
+    ['key-preview', 'raw-preview', 'special-preview'].forEach(function (eid) {
       document.getElementById(eid).classList.add('hidden');
     });
   }
@@ -371,11 +373,40 @@
     el.placeholder = range[0] + ' - ' + range[1];
   }
 
-  /* ---------- DECODE ---------- */
+  /* ---------- DECODE (one key, decoded under every model) ---------- */
+  var MODEL_ORDER = ['t119', 'td157', 'td165', 'td174'];
+  var lastHex = null;
+
   function decode() {
     var hex = document.getElementById('hex-key').value.toString().trim();
-    if (!/^[0-9a-fA-F]{6}$/.test(hex)) { alert('Enter a 6-digit hex key, e.g. 00AABB'); return; }
-    var n = current.decode(hexToBin(hex));
+    var results = document.getElementById('decode-results');
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) { results.classList.add('hidden'); lastHex = null; return; }
+    lastHex = hex;
+    var bin = hexToBin(hex);
+
+    var rows = '';
+    MODEL_ORDER.forEach(function (id) {
+      var m = MODELS[id];
+      var n = m.decode(bin);
+      rows += '<tr>' +
+        '<td>' + m.name + '</td>' +
+        '<td>' + n.station + '</td>' +
+        '<td>' + n.pager + '</td>' +
+        '<td>' + (n.action !== undefined ? n.action : '&mdash;') + '</td>' +
+        '<td style="text-align:right"><button class="outline" style="margin:0;padding:.1rem .6rem" ' +
+          'onclick="useDecoded(\'' + id + '\')">Use &#9656;</button></td>' +
+      '</tr>';
+    });
+    document.getElementById('decode-tbody').innerHTML = rows;
+    results.classList.remove('hidden');
+  }
+
+  // Load one model's interpretation into the generator panes and select it.
+  function useDecoded(id) {
+    if (!lastHex) return;
+    document.getElementById('model-select').value = id;
+    selectModel();
+    var n = MODELS[id].decode(hexToBin(lastHex));
 
     document.getElementById('k-station').value = n.station;
     document.getElementById('k-pager').value = n.pager;
@@ -384,15 +415,11 @@
     document.getElementById('r-pager-from').value = 1;
     document.getElementById('r-pager-to').value = 100;
     document.getElementById('s-station').value = n.station;
-    if (current.hasAction) {
+    if (MODELS[id].hasAction) {
       document.getElementById('k-action').value = n.action;
       document.getElementById('r-action').value = n.action;
     }
-
-    var lines = 'Station: ' + n.station + '\nPager:   ' + n.pager;
-    if (n.action !== undefined) lines += '\nAction:  ' + n.action;
-    var ro = document.getElementById('decode-readout');
-    ro.textContent = lines; ro.classList.remove('hidden');
+    document.getElementById('key-pane').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /* ---------- GENERATE: key ---------- */
