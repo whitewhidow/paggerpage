@@ -230,7 +230,7 @@
         <button class="down"  onclick="tap(1)">▼</button>
         <button class="back secondary" onclick="tap(5)">↩</button>
       </div>
-      <button id="fz-hold" class="fz-wide" onclick="sendHold()">Send (hold OK 2s)</button>
+      <button id="fz-hold" class="fz-wide contrast" onclick="sendTx()">▶ Send / Transmit</button>
     </div>
     <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
     <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
@@ -243,8 +243,10 @@
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
         then tap Connect and pick your Flipper. <strong>Mirror screen</strong> shows the Flipper's live display here,
         with a D-pad to drive it remotely (arrows + OK + Back). To transmit, open the file on the device and
-        tap <strong>"Send (hold OK 2s)"</strong> on the Sub-GHz send screen — it holds OK for ~2s then releases,
-        which works for RAW files too, because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
+        get to the Sub-GHz send screen with the D-pad, then use the <strong>▶ Send / Transmit</strong> button —
+        it pauses the screen mirror, taps OK to transmit, then resumes. (Tapping the D-pad OK to transmit while
+        the mirror is live can crash the firmware, so use the Send button for transmitting.) Works for RAW files too,
+        because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
         Download button always works as a fallback.
       </details>
     </footer>
@@ -713,30 +715,30 @@
     await flipperWrite(Uint8Array.from(buildInput(key, 2)));  // SHORT
     await flipperWrite(Uint8Array.from(buildInput(key, 1)));  // RELEASE
   }
-  // transmit = a single clean OK press, held ~2s, then released (no double events).
-  // The screen stream is paused during TX: streaming framebuffers while the radio
-  // transmits overloads BLE and can desync flow-control → firmware crash.
+  // Transmit = a normal OK tap (PRESS+SHORT+RELEASE — the send screen fires on SHORT),
+  // but with the screen stream PAUSED around it. Streaming framebuffers while the radio
+  // transmits overloads BLE and desyncs flow-control → intermittent firmware crash.
   var fzHolding = false;
   function fzWait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-  async function sendHold() {
+  async function sendTx() {
     if (!FZ.rx || fzHolding) return;
     fzHolding = true;
     var resume = FZ.mirroring;
     try {
-      if (resume) {                                           // pause the mirror so BLE is quiet during TX
+      if (resume) {                                           // quiet the BLE link during TX
         FZ.mirroring = false; flipperUi();
         await flipperWrite(Uint8Array.from(buildGuiFrame(21, 21)));   // stop screen stream
         await fzWait(250);                                    // let in-flight frames drain
       }
-      flog('Transmitting ~2s (screen paused)…');
+      flog('Sending (screen paused during TX)…');
       await flipperWrite(Uint8Array.from(buildInput(4, 0)));   // OK PRESS
-      await fzWait(2000);
+      await flipperWrite(Uint8Array.from(buildInput(4, 2)));   // OK SHORT  → transmit
       await flipperWrite(Uint8Array.from(buildInput(4, 1)));   // OK RELEASE
+      await fzWait(2000);                                      // let the radio finish while BLE is quiet
       flog('Done.');
-    } catch (e) { flog('Transmit error: ' + e.message); }
+    } catch (e) { flog('Send error: ' + e.message); }
     finally {
       if (resume) {                                           // resume the mirror
-        await fzWait(250);
         try { await flipperWrite(Uint8Array.from(buildGuiFrame(20, 20))); FZ.mirroring = true; } catch (e) {}
         flipperUi();
       }
