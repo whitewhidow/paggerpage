@@ -713,18 +713,35 @@
     await flipperWrite(Uint8Array.from(buildInput(key, 2)));  // SHORT
     await flipperWrite(Uint8Array.from(buildInput(key, 1)));  // RELEASE
   }
-  // transmit = a single clean OK press, held ~2s, then released (no double events)
+  // transmit = a single clean OK press, held ~2s, then released (no double events).
+  // The screen stream is paused during TX: streaming framebuffers while the radio
+  // transmits overloads BLE and can desync flow-control → firmware crash.
   var fzHolding = false;
+  function fzWait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   async function sendHold() {
     if (!FZ.rx || fzHolding) return;
     fzHolding = true;
-    flog('OK held — transmitting ~2s…');
+    var resume = FZ.mirroring;
     try {
+      if (resume) {                                           // pause the mirror so BLE is quiet during TX
+        FZ.mirroring = false; flipperUi();
+        await flipperWrite(Uint8Array.from(buildGuiFrame(21, 21)));   // stop screen stream
+        await fzWait(250);                                    // let in-flight frames drain
+      }
+      flog('Transmitting ~2s (screen paused)…');
       await flipperWrite(Uint8Array.from(buildInput(4, 0)));   // OK PRESS
-      await new Promise(function (r) { setTimeout(r, 2000); });
+      await fzWait(2000);
       await flipperWrite(Uint8Array.from(buildInput(4, 1)));   // OK RELEASE
-      flog('Released OK.');
-    } finally { fzHolding = false; }
+      flog('Done.');
+    } catch (e) { flog('Transmit error: ' + e.message); }
+    finally {
+      if (resume) {                                           // resume the mirror
+        await fzWait(250);
+        try { await flipperWrite(Uint8Array.from(buildGuiFrame(20, 20))); FZ.mirroring = true; } catch (e) {}
+        flipperUi();
+      }
+      fzHolding = false;
+    }
   }
 
   // launch an app by name (empty args = normal app/menu, not headless RPC mode)
