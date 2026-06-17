@@ -201,6 +201,12 @@
       <button id="fz-connect" onclick="flipperToggle()">Connect Flipper</button>
       <button id="fz-send" onclick="flipperSend()" disabled>Generate a file first</button>
     </div>
+    <div class="grid">
+      <div></div>
+      <button id="fz-mirror" onclick="flipperMirror()" disabled>Mirror screen</button>
+      <div></div>
+    </div>
+    <canvas id="fz-screen" width="512" height="256" style="image-rendering:pixelated;border-radius:8px;width:100%;max-width:512px;margin:.5rem auto 0;display:none"></canvas>
     <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
     <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
     <footer>
@@ -210,8 +216,9 @@
         so you don't need a cable or manual import. Open it afterwards on the device: <strong>Sub-GHz → Saved → pagger</strong>.
         <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
-        then tap Connect and pick your Flipper. This is experimental — if it fails, the log shows why; the
-        Download button always works as a fallback.
+        then tap Connect and pick your Flipper. <strong>Mirror screen</strong> shows the Flipper's live display here,
+        so you can do Sub-GHz → Read on the device and read/type the key without looking at the Flipper.
+        This is experimental — if it fails, the log shows why; the Download button always works as a fallback.
       </details>
     </footer>
   </article>
@@ -576,7 +583,7 @@
     RX:      '19ed82ae-ed21-4c9d-4145-228e62fe0000', // write   (us -> flipper)
     FLOW:    '19ed82ae-ed21-4c9d-4145-228e63fe0000', // notify  (rx buffer credit)
     device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: [],
-    rxbuf: new Uint8Array(0)
+    rxbuf: new Uint8Array(0), mirroring: false
   };
   var lastFile = null;
 
@@ -593,6 +600,9 @@
     if (!send) return;
     var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
     send.disabled = !(connected && lastFile);
+    var mir = document.getElementById('fz-mirror');
+    if (mir) { mir.disabled = !connected; mir.textContent = FZ.mirroring ? 'Stop mirroring' : 'Mirror screen'; }
+    var cv = document.getElementById('fz-screen'); if (cv) cv.style.display = (connected && FZ.mirroring) ? 'block' : 'none';
     document.getElementById('fz-connect').textContent = connected ? 'Disconnect' : 'Connect Flipper';
     document.getElementById('fz-status').textContent =
       (navigator.bluetooth ? (connected ? 'Connected' + (FZ.name ? ' to ' + FZ.name : '') : 'Not connected')
@@ -647,6 +657,35 @@
     }
   }
 
+  // ---- screen mirror (gui_start/stop_screen_stream → gui_screen_frame) ----
+  function buildGuiFrame(field, cmdId) { var main = pbVar(1, cmdId).concat(pbBytes(field, [])); return pbVarint(main.length).concat(main); }
+
+  // Flipper framebuffer: 128x64, 8 pages of 128 bytes, bit = vertical pixel (LSB on top)
+  function renderScreen(buf) {
+    var cv = document.getElementById('fz-screen'); if (!cv) return;
+    var W = 128, H = 64, ctx = cv.getContext('2d'), s = cv.width / W;
+    ctx.fillStyle = '#ff8c00'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#241c00';
+    for (var y = 0; y < H; y++) { var page = y >> 3, bit = y & 7;
+      for (var x = 0; x < W; x++) if (buf[page * W + x] & (1 << bit)) ctx.fillRect(x * s, y * s, s, s); }
+  }
+
+  async function flipperMirror() {
+    if (!FZ.rx) return;
+    try {
+      if (FZ.mirroring) {
+        FZ.mirroring = false;
+        await flipperWrite(Uint8Array.from(buildGuiFrame(21, 21)));   // gui_stop_screen_stream_request
+        flog('Screen mirror stopped.');
+      } else {
+        FZ.mirroring = true;
+        await flipperWrite(Uint8Array.from(buildGuiFrame(20, 20)));   // gui_start_screen_stream_request
+        flog('Screen mirror on — the Flipper display is shown below. Do Sub-GHz → Read on the device.');
+      }
+      flipperUi();
+    } catch (e) { flog('Mirror error: ' + e.message); }
+  }
+
   async function flipperConnect() {
     if (!navigator.bluetooth) { flog('Web Bluetooth not supported here (use Chrome on Android).'); return; }
     try {
@@ -659,7 +698,7 @@
       });
       FZ.name = FZ.device.name;
       FZ.rxbuf = new Uint8Array(0);
-      FZ.device.addEventListener('gattserverdisconnected', function () { flog('Disconnected.'); flipperUi(); });
+      FZ.device.addEventListener('gattserverdisconnected', function () { FZ.mirroring = false; flog('Disconnected.'); flipperUi(); });
       flog('Connecting GATT…');
       var server = await FZ.device.gatt.connect();
       var svc = await server.getPrimaryService(FZ.SERVICE);
@@ -690,11 +729,19 @@
   function readVarint(d, i) { var v = 0, sh = 0; while (i < d.length) { var by = d[i++]; v |= (by & 0x7f) << sh; sh += 7; if (!(by & 0x80)) break; } return [v >>> 0, i]; }
 
   function parseMain(d) {
-    var i = 0, out = { cmd: 0, status: 0 };
+    var i = 0, out = { cmd: 0, status: 0, screen: null };
     while (i < d.length) {
       var k = readVarint(d, i); i = k[1]; var field = k[0] >> 3, wire = k[0] & 7;
       if (wire === 0) { var v = readVarint(d, i); i = v[1]; if (field === 1) out.cmd = v[0]; else if (field === 2) out.status = v[0]; }
-      else if (wire === 2) { var L = readVarint(d, i); i = L[1]; i += L[0]; }
+      else if (wire === 2) {
+        var L = readVarint(d, i); i = L[1]; var s0 = i; i += L[0];
+        if (field === 22) {                                  // gui_screen_frame { bytes data = 1 }
+          var sub = d.slice(s0, s0 + L[0]), j = 0;
+          while (j < sub.length) { var kk = readVarint(sub, j); j = kk[1]; var f2 = kk[0] >> 3, w2 = kk[0] & 7;
+            if (w2 === 2) { var LL = readVarint(sub, j); j = LL[1]; if (f2 === 1) out.screen = sub.slice(j, j + LL[0]); j += LL[0]; }
+            else if (w2 === 0) { var vv = readVarint(sub, j); j = vv[1]; } else break; }
+        }
+      }
       else if (wire === 5) { i += 4; } else if (wire === 1) { i += 8; } else break;
     }
     return out;
@@ -713,6 +760,7 @@
   }
 
   function onRpcMessage(m) {
+    if (m.screen) { renderScreen(m.screen); return; }   // screen frames are frequent — don't log them
     flog('  ← cmd ' + m.cmd + ' status ' + m.status + (m.status === 0 ? ' (OK)' : m.status === 6 ? ' (exists, ok)' : ' (error)'));
   }
 
