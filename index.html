@@ -207,6 +207,15 @@
       <div></div>
     </div>
     <canvas id="fz-screen" width="512" height="256" style="image-rendering:pixelated;border-radius:8px;width:100%;max-width:512px;margin:.5rem auto 0;display:none"></canvas>
+    <div id="fz-controls" style="display:none;max-width:300px;margin:.6rem auto 0">
+      <div class="grid"><div></div><button onclick="tap(0)">▲</button><div></div></div>
+      <div class="grid"><button onclick="tap(3)">◀</button><button onclick="tap(4)">OK</button><button onclick="tap(2)">▶</button></div>
+      <div class="grid"><div></div><button onclick="tap(1)">▼</button><div></div></div>
+      <div class="grid">
+        <button class="secondary" onclick="tap(5)">Back</button>
+        <button id="fz-hold" style="touch-action:none;user-select:none" onpointerdown="holdStart(4)" onpointerup="holdEnd(4)" onpointerleave="holdEnd(4)" onpointercancel="holdEnd(4)">Hold OK = send</button>
+      </div>
+    </div>
     <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
     <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
     <footer>
@@ -217,8 +226,10 @@
         <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
         then tap Connect and pick your Flipper. <strong>Mirror screen</strong> shows the Flipper's live display here,
-        so you can do Sub-GHz → Read on the device and read/type the key without looking at the Flipper.
-        This is experimental — if it fails, the log shows why; the Download button always works as a fallback.
+        with a D-pad to drive it remotely (arrows + OK + Back). To transmit, open the file on the device and
+        <strong>press &amp; hold "Hold OK = send"</strong> on the Sub-GHz send screen — this works for RAW files too,
+        because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
+        Download button always works as a fallback.
       </details>
     </footer>
   </article>
@@ -602,7 +613,9 @@
     send.disabled = !(connected && lastFile);
     var mir = document.getElementById('fz-mirror');
     if (mir) { mir.disabled = !connected; mir.textContent = FZ.mirroring ? 'Stop mirroring' : 'Mirror screen'; }
-    var cv = document.getElementById('fz-screen'); if (cv) cv.style.display = (connected && FZ.mirroring) ? 'block' : 'none';
+    var showMir = connected && FZ.mirroring;
+    var cv = document.getElementById('fz-screen'); if (cv) cv.style.display = showMir ? 'block' : 'none';
+    var ctl = document.getElementById('fz-controls'); if (ctl) ctl.style.display = showMir ? 'block' : 'none';
     document.getElementById('fz-connect').textContent = connected ? 'Disconnect' : 'Connect Flipper';
     document.getElementById('fz-status').textContent =
       (navigator.bluetooth ? (connected ? 'Connected' + (FZ.name ? ' to ' + FZ.name : '') : 'Not connected')
@@ -669,6 +682,23 @@
     for (var y = 0; y < H; y++) { var page = y >> 3, bit = y & 7;
       for (var x = 0; x < W; x++) if (buf[page * W + x] & (1 << bit)) ctx.fillRect(x * s, y * s, s, s); }
   }
+
+  // ---- remote control (gui_send_input_event_request = 23) ----
+  // keys: UP0 DOWN1 RIGHT2 LEFT3 OK4 BACK5 ; types: PRESS0 RELEASE1 SHORT2 LONG3
+  var fzCmd = 30;
+  function buildInput(key, type) {
+    var body = pbVar(1, key).concat(pbVar(2, type));
+    var main = pbVar(1, fzCmd++).concat(pbBytes(23, body));   // gui_send_input_event_request = 23
+    return pbVarint(main.length).concat(main);
+  }
+  async function tap(key) {                                   // a short button press
+    if (!FZ.rx) return;
+    await flipperWrite(Uint8Array.from(buildInput(key, 0)));  // PRESS
+    await flipperWrite(Uint8Array.from(buildInput(key, 2)));  // SHORT
+    await flipperWrite(Uint8Array.from(buildInput(key, 1)));  // RELEASE
+  }
+  async function holdStart(key) { if (FZ.rx) await flipperWrite(Uint8Array.from(buildInput(key, 0))); } // PRESS (hold)
+  async function holdEnd(key)   { if (FZ.rx) await flipperWrite(Uint8Array.from(buildInput(key, 1))); } // RELEASE
 
   async function flipperMirror() {
     if (!FZ.rx) return;
