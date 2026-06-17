@@ -612,7 +612,8 @@
     RX:      '19ed82ae-ed21-4c9d-4145-228e62fe0000', // write   (us -> flipper)
     FLOW:    '19ed82ae-ed21-4c9d-4145-228e63fe0000', // notify  (rx buffer credit)
     device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: [],
-    rxbuf: new Uint8Array(0), mirroring: false
+    rxbuf: new Uint8Array(0), mirroring: false,
+    name: null, autoReconnect: true, userDisconnect: false, reconnecting: false, _bound: null
   };
   var lastFile = null;
 
@@ -646,6 +647,7 @@
     if (connected) flipperDisconnect(); else flipperConnect();
   }
   function flipperDisconnect() {
+    FZ.userDisconnect = true;   // intentional — don't auto-reconnect
     try { if (FZ.device && FZ.device.gatt && FZ.device.gatt.connected) { flog('Disconnecting…'); FZ.device.gatt.disconnect(); } }
     catch (e) { flog('Disconnect error: ' + e.message); }
   }
@@ -757,6 +759,17 @@
     await flipperWrite(Uint8Array.from(buildAppStart('Sub-GHz')));
   }
 
+  // start the mirror if it isn't already running (used for auto-mirror on connect)
+  async function startMirror() {
+    if (!FZ.rx || FZ.mirroring) return;
+    try {
+      FZ.mirroring = true;
+      await flipperWrite(Uint8Array.from(buildGuiFrame(20, 20)));   // gui_start_screen_stream_request
+      flog('Screen mirror on (auto).');
+      flipperUi();
+    } catch (e) { FZ.mirroring = false; flog('Auto-mirror failed: ' + e.message); flipperUi(); }
+  }
+
   async function flipperMirror() {
     if (!FZ.rx) return;
     try {
@@ -773,43 +786,100 @@
     } catch (e) { flog('Mirror error: ' + e.message); }
   }
 
+  // named notification handlers (named so re-adding on reconnect can't stack duplicates)
+  function onTxValue(e) {
+    var d = new Uint8Array(e.target.value.buffer);
+    var merged = new Uint8Array(FZ.rxbuf.length + d.length);
+    merged.set(FZ.rxbuf); merged.set(d, FZ.rxbuf.length);
+    FZ.rxbuf = merged;
+    rpcConsume();   // parse complete PB_Main responses out of the buffer
+  }
+  function onFlowValue(e) { grantCredit(e.target.value.getUint32(0, false)); }
+
+  // attach the disconnect listener exactly once per device object
+  function flipperBind(device) {
+    FZ.device = device;
+    if (FZ._bound !== device) {
+      device.addEventListener('gattserverdisconnected', onFlipperDisconnected);
+      FZ._bound = device;
+    }
+  }
+
+  // open the GATT link, wire up the characteristics, then auto-start the mirror
+  async function flipperAttach(device) {
+    FZ.rxbuf = new Uint8Array(0);
+    flog('Connecting GATT…');
+    var server = await device.gatt.connect();
+    var svc = await server.getPrimaryService(FZ.SERVICE);
+    FZ.rx = await svc.getCharacteristic(FZ.RX);
+    var tx = await svc.getCharacteristic(FZ.TX);
+    var flow = await svc.getCharacteristic(FZ.FLOW);
+
+    await tx.startNotifications();
+    tx.addEventListener('characteristicvaluechanged', onTxValue);
+
+    try { var v = await flow.readValue(); FZ.buff = FZ.credit = v.getUint32(0, false); }
+    catch (e) { flog('(flow read failed, assuming ' + FZ.buff + ' byte buffer)'); }
+    await flow.startNotifications();
+    flow.addEventListener('characteristicvaluechanged', onFlowValue);
+
+    FZ.name = device.name;
+    flog('Connected. RX buffer ≈ ' + FZ.buff + ' bytes. Ready to send.');
+    flipperUi();
+    startMirror();   // auto-start the screen mirror once connected
+  }
+
+  function onFlipperDisconnected() {
+    FZ.mirroring = false; FZ.rx = null;
+    flipperUi();
+    if (FZ.userDisconnect || !FZ.autoReconnect) { flog('Disconnected.'); FZ.userDisconnect = false; return; }
+    flog('Link dropped — reconnecting…');
+    flipperReconnectLoop();
+  }
+
+  // retry the GATT link a few times after an unexpected drop
+  async function flipperReconnectLoop() {
+    if (FZ.reconnecting || !FZ.device) return;
+    FZ.reconnecting = true;
+    for (var attempt = 1; attempt <= 5 && !FZ.userDisconnect; attempt++) {
+      try { await flipperAttach(FZ.device); FZ.reconnecting = false; return; }
+      catch (e) { flog('Reconnect attempt ' + attempt + '/5 failed: ' + e.message); await fzWait(2000); }
+    }
+    FZ.reconnecting = false;
+  }
+
   async function flipperConnect() {
     if (!navigator.bluetooth) { flog('Web Bluetooth not supported here (use Chrome on Android).'); return; }
     try {
       flog('Requesting device… (pick your Flipper from the list)');
       flog('Empty list? → 1) turn ON Location + allow Chrome "Nearby devices"/Location,');
       flog('   2) DISCONNECT the Flipper app so it advertises, 3) Flipper BT must be on.');
-      FZ.device = await navigator.bluetooth.requestDevice({
+      var device = await navigator.bluetooth.requestDevice({
         // show everything so a non-"Flipper" name or missing service ad can't hide it
         acceptAllDevices: true, optionalServices: [FZ.SERVICE]
       });
-      FZ.name = FZ.device.name;
-      FZ.rxbuf = new Uint8Array(0);
-      FZ.device.addEventListener('gattserverdisconnected', function () { FZ.mirroring = false; flog('Disconnected.'); flipperUi(); });
-      flog('Connecting GATT…');
-      var server = await FZ.device.gatt.connect();
-      var svc = await server.getPrimaryService(FZ.SERVICE);
-      FZ.rx = await svc.getCharacteristic(FZ.RX);
-      var tx = await svc.getCharacteristic(FZ.TX);
-      var flow = await svc.getCharacteristic(FZ.FLOW);
-
-      await tx.startNotifications();
-      tx.addEventListener('characteristicvaluechanged', function (e) {
-        var d = new Uint8Array(e.target.value.buffer);
-        var merged = new Uint8Array(FZ.rxbuf.length + d.length);
-        merged.set(FZ.rxbuf); merged.set(d, FZ.rxbuf.length);
-        FZ.rxbuf = merged;
-        rpcConsume();   // parse complete PB_Main responses out of the buffer
-      });
-
-      try { var v = await flow.readValue(); FZ.buff = FZ.credit = v.getUint32(0, false); }
-      catch (e) { flog('(flow read failed, assuming ' + FZ.buff + ' byte buffer)'); }
-      await flow.startNotifications();
-      flow.addEventListener('characteristicvaluechanged', function (e) { grantCredit(e.target.value.getUint32(0, false)); });
-
-      flog('Connected. RX buffer ≈ ' + FZ.buff + ' bytes. Ready to send.');
-      flipperUi();
+      FZ.userDisconnect = false;
+      flipperBind(device);
+      try { localStorage.setItem('fz-device-id', device.id); } catch (e) {}
+      await flipperAttach(device);
     } catch (err) { flog('Connect failed: ' + err.message); flipperUi(); }
+  }
+
+  // On page load, silently reconnect to the Flipper we already have permission for
+  // (no chooser). Needs the device to be advertising (Flipper app disconnected).
+  async function flipperAutoConnect() {
+    if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+    try {
+      var devices = await navigator.bluetooth.getDevices();
+      if (!devices || !devices.length) return;
+      var wantId = null; try { wantId = localStorage.getItem('fz-device-id'); } catch (e) {}
+      var device = devices.filter(function (d) { return d.id === wantId; })[0] || devices[0];
+      if (!device) return;
+      FZ.userDisconnect = false;
+      flipperBind(device);
+      flog('Found a known Flipper (' + (device.name || 'unnamed') + ') — auto-connecting…');
+      await flipperAttach(device);
+    } catch (e) { flog('Auto-connect skipped: ' + e.message); flipperUi(); }
   }
 
   // ---- RPC response parsing (length-delimited PB_Main stream) ----
@@ -874,6 +944,7 @@
 
   selectModel();
   flipperUi();
+  flipperAutoConnect();   // try to silently reconnect to a known Flipper on load
 </script>
 </body>
 </html>
