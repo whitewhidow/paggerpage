@@ -69,14 +69,17 @@
       </table>
     </div>
     <footer>
-      Every row decodes the same bits — the numbers alone can't tell you the model.
-      Rows shown <span style="color:#d32f2f;font-weight:700">in red (&#10007;)</span> have a pager number
-      or action value that hardware can't actually produce, so that model is ruled out.
-      For the rest, <strong>match the "Signal fingerprint" against your Flipper read screen</strong>
-      (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values), then hit
-      <strong>Use</strong> on the right row to load it into the generators.
-      <br><small>Real pager capacity: T119 1–999 · TD157 1–998 · TD165 1–999 · TD174 1–10.
-      Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — pick your physical model.</small>
+      <details>
+        <summary>How to read this</summary>
+        Every row decodes the same bits — the numbers alone can't tell you the model.
+        Rows shown <span style="color:#d32f2f;font-weight:700">in red (&#10007;)</span> have a pager number
+        or action value that hardware can't actually produce, so that model is ruled out.
+        For the rest, <strong>match the "Signal fingerprint" against your Flipper read screen</strong>
+        (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values), then hit
+        <strong>Use</strong> on the right row to load it into the generator.
+        <br><small>Real pager capacity: T119 1–999 · TD157 1–998 · TD165 1–999 · TD174 1–10.
+        Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — pick your physical model.</small>
+      </details>
     </footer>
   </article>
 
@@ -96,38 +99,12 @@
       </div>
       <div></div>
     </div>
-    <footer id="model-info">Select the pager model for the generators below. All generator panes adapt to it.</footer>
-  </article>
-
-  <!-- ============ KEY FILE ============ -->
-  <article id="key-pane" class="green-theme">
-    <header><h3>KEY FILE &nbsp;(numbers &#8594; single pager)</h3></header>
-    <div class="grid">
-      <div>
-        <label for="k-station">Station:</label>
-        <input type="number" id="k-station" min="0">
-      </div>
-      <div>
-        <label for="k-pager">Pager:</label>
-        <input type="number" id="k-pager" min="0">
-      </div>
-      <div>
-        <label for="k-action">Action:</label>
-        <select id="k-action"></select>
-      </div>
-    </div>
-    <div class="grid">
-      <div></div>
-      <button id="key-download" onclick="genKeyFile()">Generate &amp; download</button>
-      <div></div>
-    </div>
-    <textarea class="preview hidden" id="key-preview" readonly></textarea>
-    <footer>This single key file will call one pager.</footer>
+    <footer id="model-info">Select the pager model for the generator below. The generator panes adapt to it.</footer>
   </article>
 
   <!-- ============ RAW FILE ============ -->
   <article id="raw-pane" class="green-theme">
-    <header><h3>RAW FILE &nbsp;(numbers &#8594; many pagers)</h3></header>
+    <header><h3>GENERATE &nbsp;(numbers &#8594; raw .sub)</h3></header>
     <div class="grid">
       <div class="grid">
         <div>
@@ -166,7 +143,14 @@
       <div></div>
     </div>
     <textarea class="preview hidden" id="raw-preview" readonly></textarea>
-    <footer>Calls multiple pagers in one shot. <strong>Repeat</strong> = how many times each call is sent (default 10). For a single pager sent N times, set the from/to fields equal.</footer>
+    <footer>
+      <details>
+        <summary>About this file</summary>
+        Generates one <code>.sub</code> that calls every pager in the station/pager ranges.
+        <strong>Repeat</strong> = how many times each call is sent (default 10).
+        For a single pager, set the from/to fields equal (the <strong>Use</strong> button does this for you).
+      </details>
+    </footer>
   </article>
 
   <!-- ============ SPECIAL FILE ============ -->
@@ -192,7 +176,12 @@
       <div></div>
     </div>
     <textarea class="preview hidden" id="special-preview" readonly></textarea>
-    <footer id="special-info"></footer>
+    <footer>
+      <details>
+        <summary>What this does</summary>
+        <span id="special-info"></span>
+      </details>
+    </footer>
   </article>
 
   <footer>
@@ -398,15 +387,13 @@
     var optsHtml = current.actionOptions.map(function (o) {
       return '<option value="' + o.value + '">' + o.label + '</option>';
     }).join('');
-    document.getElementById('k-action').innerHTML = optsHtml;
     document.getElementById('r-action').innerHTML = optsHtml;
 
     // ranges + placeholders
-    setRange('k-station', r.station); setRange('s-station', r.station);
+    setRange('s-station', r.station);
     setRange('r-station-from', r.station); setRange('r-station-to', r.station);
-    setRange('k-pager', r.pager);
     setRange('r-pager-from', r.pager); setRange('r-pager-to', r.pager);
-    if (current.hasAction) { setRange('k-action', r.action); setRange('r-action', r.action); }
+    if (current.hasAction) { setRange('r-action', r.action); }
 
     // special pane labels + fixed (read-only) pager/action shown for clarity
     document.getElementById('special-title').textContent = current.special.label;
@@ -418,7 +405,7 @@
       ' · TE ' + current.te + ' · ' + (current.freq / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz';
 
     // clear generator previews (the decode table is model-independent, leave it)
-    ['key-preview', 'raw-preview', 'special-preview'].forEach(function (eid) {
+    ['raw-preview', 'special-preview'].forEach(function (eid) {
       document.getElementById(eid).classList.add('hidden');
     });
   }
@@ -475,24 +462,22 @@
     results.classList.remove('hidden');
   }
 
-  // Load one model's interpretation into the generator panes and select it.
+  // Load one model's interpretation into the generator and select it.
   function useDecoded(id) {
     if (!lastHex) return;
     document.getElementById('model-select').value = id;
     selectModel();
     var n = MODELS[id].decode(hexToBin(lastHex));
 
-    document.getElementById('k-station').value = n.station;
-    document.getElementById('k-pager').value = n.pager;
+    // single decoded pager → station + pager from/to all set to that one value
     document.getElementById('r-station-from').value = n.station;
     document.getElementById('r-station-to').value = n.station;
-    document.getElementById('r-pager-from').value = 1;
-    document.getElementById('r-pager-to').value = 100;
+    document.getElementById('r-pager-from').value = n.pager;
+    document.getElementById('r-pager-to').value = n.pager;
     document.getElementById('s-station').value = n.station;
     // preselect the decoded action if it's a selectable per-call action for this model
-    setSelectIfPresent('k-action', String(n.action));
     setSelectIfPresent('r-action', String(n.action));
-    document.getElementById('key-pane').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('raw-pane').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // set a <select> to a value only if that option exists (otherwise leave its default)
@@ -507,19 +492,6 @@
   function modelToken(m) { return m.name.replace('Retekess ', ''); }           // e.g. "T119"
   function actionToken(m, val) { return m.actionName(val).split(' ')[0].toLowerCase(); } // "ring" / "call" ...
   function rng(a, b) { return a === b ? ('' + a) : (a + '-' + b); }            // "5" or "1-100"
-
-  /* ---------- GENERATE: key ---------- */
-  function genKeyFile() {
-    var station = Number(document.getElementById('k-station').value);
-    var pager = Number(document.getElementById('k-pager').value);
-    var action = document.getElementById('k-action').value; // string: '0'/'1' or '0010' (TD157)
-
-    var hex = current.keyHex(station, pager, action);
-    var content = keyFile(current, hex);
-    var name = modelToken(current) + '_st' + station + '_pg' + pager + '_' + actionToken(current, action);
-    showPreview('key-preview', content);
-    download(content, name + '.sub');
-  }
 
   /* ---------- GENERATE: raw ---------- */
   function genRawFile() {
