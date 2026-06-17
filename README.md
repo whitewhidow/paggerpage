@@ -1,21 +1,35 @@
 # Pagger — All In One
 
-A single self-contained page that decodes **and** generates Flipper Zero `.sub`
-files for Retekess **T119 / TD157 / TD165 / TD174** pagers.
+A single self-contained HTML page (`index.html`, no build step, no dependencies)
+that decodes **and** generates Flipper Zero `.sub` files for Retekess
+**T119 / TD157 / TD165 / TD174** pagers, and can push them straight to a Flipper
+over Bluetooth.
 
-Combines the four separate tools from the original
-[Pagger project](https://github.com/meoker/pagger) into one page:
+It unifies the separate tools from the original
+[Pagger project](https://github.com/meoker/pagger) into one page. Pick the device
+in the **Device** pane and the generator adapts to that model's bit layout,
+protocol, TE and frequency.
 
-- **Decode** a captured hex key into Station / Pager / Action numbers.
-- **Generate** Key files (single pager), RAW files (ranges of pagers), and the
-  special Turn-off / Desync files.
+## What it does
 
-Pick the device from the dropdown at the top — every pane adapts to the
-selected model's bit layout, protocol, TE and frequency.
+- **Send to Flipper** *(Bluetooth · experimental)* — connect to a Flipper over
+  Web Bluetooth, write the last generated file to `/ext/subghz/pagger/`, mirror
+  the device screen, drive it with an on-screen D-pad, and transmit — no cable or
+  manual import. **Android Chrome only**; disconnect the official Flipper app
+  first. The Download button is always available as a fallback.
+- **Decode** a captured 6-hex-digit key into Station / Pager / Action numbers.
+  Every model is decoded at once; impossible rows are ruled out and a "signal
+  fingerprint" (frequency · protocol/bit · TE) is shown to match against the
+  Flipper read screen. **Use** loads a row into the generator.
+- **Generate** a RAW `.sub` calling every pager across a station/pager range,
+  with a repeat count (single pager = set *from*/*to* equal).
+- **Special file** — per model: a **Turn-off** broadcast (T119 / TD157 / TD165)
+  or a **Desync** command (TD174).
 
 ## Hosting
 
-Served as a static page via GitHub Pages — `index.html` at the repo root.
+Static page — serve `index.html` from any web host (e.g. GitHub Pages at the repo
+root). Ships with a PWA `manifest.webmanifest` and icons for install-to-homescreen.
 
 ## Credit
 
