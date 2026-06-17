@@ -613,7 +613,8 @@
     FLOW:    '19ed82ae-ed21-4c9d-4145-228e63fe0000', // notify  (rx buffer credit)
     device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: [],
     rxbuf: new Uint8Array(0), mirroring: false,
-    name: null, autoReconnect: true, userDisconnect: false, reconnecting: false, _bound: null
+    name: null, autoReconnect: true, userDisconnect: false, reconnecting: false, _bound: null,
+    tx: null, flow: null
   };
   var lastFile = null;
 
@@ -646,10 +647,21 @@
     var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
     if (connected) flipperDisconnect(); else flipperConnect();
   }
-  function flipperDisconnect() {
+  async function flipperDisconnect() {
     FZ.userDisconnect = true;   // intentional — don't auto-reconnect
-    try { if (FZ.device && FZ.device.gatt && FZ.device.gatt.connected) { flog('Disconnecting…'); FZ.device.gatt.disconnect(); } }
+    var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
+    if (!connected) { FZ.userDisconnect = false; return; }
+    flog('Disconnecting…');
+    // Clean teardown: stop the stream + release notification subscriptions FIRST.
+    // gatt.disconnect() alone often leaves the OS-level BLE link up (Android), so the
+    // Flipper keeps showing "connected" and won't re-advertise. Unsubscribing lets it drop.
+    try { if (FZ.mirroring && FZ.rx) await flipperWrite(Uint8Array.from(buildGuiFrame(21, 21))); } catch (e) {}
+    FZ.mirroring = false;
+    try { if (FZ.tx) { FZ.tx.removeEventListener('characteristicvaluechanged', onTxValue); await FZ.tx.stopNotifications(); } } catch (e) {}
+    try { if (FZ.flow) { FZ.flow.removeEventListener('characteristicvaluechanged', onFlowValue); await FZ.flow.stopNotifications(); } } catch (e) {}
+    try { FZ.device.gatt.disconnect(); }
     catch (e) { flog('Disconnect error: ' + e.message); }
+    FZ.rx = FZ.tx = FZ.flow = null;
   }
 
   // ---- tiny protobuf encoder (only what storage_write needs) ----
@@ -812,8 +824,8 @@
     var server = await device.gatt.connect();
     var svc = await server.getPrimaryService(FZ.SERVICE);
     FZ.rx = await svc.getCharacteristic(FZ.RX);
-    var tx = await svc.getCharacteristic(FZ.TX);
-    var flow = await svc.getCharacteristic(FZ.FLOW);
+    var tx = FZ.tx = await svc.getCharacteristic(FZ.TX);
+    var flow = FZ.flow = await svc.getCharacteristic(FZ.FLOW);
 
     await tx.startNotifications();
     tx.addEventListener('characteristicvaluechanged', onTxValue);
