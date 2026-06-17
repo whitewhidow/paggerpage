@@ -208,6 +208,7 @@
     </div>
     <canvas id="fz-screen" width="512" height="256" style="image-rendering:pixelated;border-radius:8px;width:100%;max-width:512px;margin:.5rem auto 0;display:none"></canvas>
     <div id="fz-controls" style="display:none;max-width:300px;margin:.6rem auto 0">
+      <div class="grid"><div></div><button class="contrast" onclick="startSubghz()">Open Sub-GHz app</button><div></div></div>
       <div class="grid"><div></div><button onclick="tap(0)">▲</button><div></div></div>
       <div class="grid"><button onclick="tap(3)">◀</button><button onclick="tap(4)">OK</button><button onclick="tap(2)">▶</button></div>
       <div class="grid"><div></div><button onclick="tap(1)">▼</button><div></div></div>
@@ -700,6 +701,17 @@
   async function holdStart(key) { if (FZ.rx) await flipperWrite(Uint8Array.from(buildInput(key, 0))); } // PRESS (hold)
   async function holdEnd(key)   { if (FZ.rx) await flipperWrite(Uint8Array.from(buildInput(key, 1))); } // RELEASE
 
+  // launch an app by name (empty args = normal app/menu, not headless RPC mode)
+  function buildAppStart(name) {
+    var main = pbVar(1, fzCmd++).concat(pbBytes(16, pbBytes(1, utf8(name))));   // app_start_request = 16
+    return pbVarint(main.length).concat(main);
+  }
+  async function startSubghz() {
+    if (!FZ.rx) return;
+    flog('Launching Sub-GHz app… (Flipper must be on the desktop, no app open)');
+    await flipperWrite(Uint8Array.from(buildAppStart('Sub-GHz')));
+  }
+
   async function flipperMirror() {
     if (!FZ.rx) return;
     try {
@@ -791,7 +803,7 @@
 
   function onRpcMessage(m) {
     if (m.screen) { renderScreen(m.screen); return; }   // screen frames are frequent — don't log them
-    flog('  ← cmd ' + m.cmd + ' status ' + m.status + (m.status === 0 ? ' (OK)' : m.status === 6 ? ' (exists, ok)' : ' (error)'));
+    flog('  ← cmd ' + m.cmd + ' status ' + m.status + (m.status === 0 ? ' (OK)' : m.status === 6 ? ' (exists, ok)' : m.status === 17 ? ' (another app is open — press Back to the desktop first)' : ' (error)'));
   }
 
   async function flipperSend() {
