@@ -72,6 +72,51 @@
     <p>Decode &amp; generate Flipper Zero <code>.sub</code> files for Retekess T119 / TD157 / TD165 / TD174 pagers.</p>
   </header>
 
+  <!-- ============ SEND TO FLIPPER (BLE, experimental) ============ -->
+  <article id="flipper-pane" class="blue-theme">
+    <header><h3>SEND TO FLIPPER &nbsp;(Bluetooth · experimental)</h3></header>
+    <div class="grid">
+      <button id="fz-connect" onclick="flipperToggle()">Connect Flipper</button>
+      <button id="fz-send" onclick="flipperSend()" disabled>Generate a file first</button>
+    </div>
+    <div class="grid">
+      <div></div>
+      <button id="fz-mirror" onclick="flipperMirror()" disabled>Mirror screen</button>
+      <div></div>
+    </div>
+    <canvas id="fz-screen" width="512" height="256" style="image-rendering:pixelated;border-radius:8px;width:100%;max-width:512px;margin:.5rem auto 0;display:none"></canvas>
+    <div id="fz-controls" style="display:none;margin:.6rem auto 0;text-align:center">
+      <button class="contrast fz-wide" onclick="startSubghz()">Open Sub-GHz app</button>
+      <div class="dpad">
+        <button class="up"    onclick="tap(0)">▲</button>
+        <button class="left"  onclick="tap(3)">◀</button>
+        <button class="ok"    onclick="tap(4)">OK</button>
+        <button class="right" onclick="tap(2)">▶</button>
+        <button class="down"  onclick="tap(1)">▼</button>
+        <button class="back secondary" onclick="tap(5)">↩</button>
+      </div>
+      <button id="fz-hold" class="fz-wide contrast" onclick="sendTx()">▶ Send / Transmit</button>
+    </div>
+    <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
+    <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
+    <footer>
+      <details>
+        <summary>Read me before using</summary>
+        Writes the last generated file straight to <code>/ext/subghz/pagger/</code> on your Flipper over BLE (the folder is created if missing),
+        so you don't need a cable or manual import. Open it afterwards on the device: <strong>Sub-GHz → Saved → pagger</strong>.
+        <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
+        <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
+        then tap Connect and pick your Flipper. <strong>Mirror screen</strong> shows the Flipper's live display here,
+        with a D-pad to drive it remotely (arrows + OK + Back). To transmit, open the file on the device and
+        get to the Sub-GHz send screen with the D-pad, then use the <strong>▶ Send / Transmit</strong> button —
+        it pauses the screen mirror, taps OK to transmit, then resumes. (Tapping the D-pad OK to transmit while
+        the mirror is live can crash the firmware, so use the Send button for transmitting.) Works for RAW files too,
+        because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
+        Download button always works as a fallback.
+      </details>
+    </footer>
+  </article>
+
   <!-- ============ DECODE ============ -->
   <article id="signal-pane" class="orange-theme">
     <header><h3>DECODE &nbsp;(signal &#8594; numbers, all models)</h3></header>
@@ -203,51 +248,6 @@
       <details>
         <summary>What this does</summary>
         <span id="special-info"></span>
-      </details>
-    </footer>
-  </article>
-
-  <!-- ============ SEND TO FLIPPER (BLE, experimental) ============ -->
-  <article id="flipper-pane" class="blue-theme">
-    <header><h3>SEND TO FLIPPER &nbsp;(Bluetooth · experimental)</h3></header>
-    <div class="grid">
-      <button id="fz-connect" onclick="flipperToggle()">Connect Flipper</button>
-      <button id="fz-send" onclick="flipperSend()" disabled>Generate a file first</button>
-    </div>
-    <div class="grid">
-      <div></div>
-      <button id="fz-mirror" onclick="flipperMirror()" disabled>Mirror screen</button>
-      <div></div>
-    </div>
-    <canvas id="fz-screen" width="512" height="256" style="image-rendering:pixelated;border-radius:8px;width:100%;max-width:512px;margin:.5rem auto 0;display:none"></canvas>
-    <div id="fz-controls" style="display:none;margin:.6rem auto 0;text-align:center">
-      <button class="contrast fz-wide" onclick="startSubghz()">Open Sub-GHz app</button>
-      <div class="dpad">
-        <button class="up"    onclick="tap(0)">▲</button>
-        <button class="left"  onclick="tap(3)">◀</button>
-        <button class="ok"    onclick="tap(4)">OK</button>
-        <button class="right" onclick="tap(2)">▶</button>
-        <button class="down"  onclick="tap(1)">▼</button>
-        <button class="back secondary" onclick="tap(5)">↩</button>
-      </div>
-      <button id="fz-hold" class="fz-wide contrast" onclick="sendTx()">▶ Send / Transmit</button>
-    </div>
-    <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
-    <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
-    <footer>
-      <details>
-        <summary>Read me before using</summary>
-        Writes the last generated file straight to <code>/ext/subghz/pagger/</code> on your Flipper over BLE (the folder is created if missing),
-        so you don't need a cable or manual import. Open it afterwards on the device: <strong>Sub-GHz → Saved → pagger</strong>.
-        <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
-        <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
-        then tap Connect and pick your Flipper. <strong>Mirror screen</strong> shows the Flipper's live display here,
-        with a D-pad to drive it remotely (arrows + OK + Back). To transmit, open the file on the device and
-        get to the Sub-GHz send screen with the D-pad, then use the <strong>▶ Send / Transmit</strong> button —
-        it pauses the screen mirror, taps OK to transmit, then resumes. (Tapping the D-pad OK to transmit while
-        the mirror is live can crash the firmware, so use the Send button for transmitting.) Works for RAW files too,
-        because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
-        Download button always works as a fallback.
       </details>
     </footer>
   </article>
