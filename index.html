@@ -303,6 +303,7 @@
       realPager: [1, 999], // hardware: up to 999 pagers
       actionOptions: [{ value: '0', label: 'Ring (0)' }, { value: '1', label: 'Mute (1)' }],
       actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
+      validActions: [0, 1], // 1-bit field: every value is valid
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
       decode: function (bin) {
@@ -431,7 +432,7 @@
       var n = m.decode(bin);
       var rp = m.realPager;
       var pagerBad = (n.pager < rp[0] || n.pager > rp[1]);          // outside real pager capacity → impossible
-      var actionBad = (m.validActions.indexOf(n.action) === -1);    // action bits this hardware never sends → impossible
+      var actionBad = !!m.validActions && (m.validActions.indexOf(n.action) === -1);  // action bits this hardware never sends → impossible
       var ruledOut = pagerBad || actionBad;
       var pagerCell = pagerBad
         ? '<td class="bad" title="Outside ' + m.name + ' pager range ' + rp[0] + '-' + rp[1] + '">' + n.pager + '</td>'
