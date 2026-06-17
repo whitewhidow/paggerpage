@@ -620,9 +620,12 @@
   async function flipperConnect() {
     if (!navigator.bluetooth) { flog('Web Bluetooth not supported here (use Chrome on Android).'); return; }
     try {
-      flog('Requesting device… (pick your Flipper)');
+      flog('Requesting device… (pick your Flipper from the list)');
+      flog('Empty list? → 1) turn ON Location + allow Chrome "Nearby devices"/Location,');
+      flog('   2) DISCONNECT the Flipper app so it advertises, 3) Flipper BT must be on.');
       FZ.device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'Flipper' }], optionalServices: [FZ.SERVICE]
+        // show everything so a non-"Flipper" name or missing service ad can't hide it
+        acceptAllDevices: true, optionalServices: [FZ.SERVICE]
       });
       FZ.name = FZ.device.name;
       FZ.device.addEventListener('gattserverdisconnected', function () { flog('Disconnected.'); flipperUi(); });
