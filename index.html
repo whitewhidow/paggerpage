@@ -194,6 +194,27 @@
     </footer>
   </article>
 
+  <!-- ============ SEND TO FLIPPER (BLE, experimental) ============ -->
+  <article id="flipper-pane" class="blue-theme">
+    <header><h3>SEND TO FLIPPER &nbsp;(Bluetooth · experimental)</h3></header>
+    <div class="grid">
+      <button onclick="flipperConnect()">Connect Flipper</button>
+      <button id="fz-send" onclick="flipperSend()" disabled>Generate a file first</button>
+    </div>
+    <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
+    <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
+    <footer>
+      <details>
+        <summary>Read me before using</summary>
+        Writes the last generated file straight to <code>/ext/subghz/</code> on your Flipper over BLE.
+        <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
+        <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
+        then tap Connect and pick your Flipper. This is experimental — if it fails, the log shows why; the
+        Download button always works as a fallback (import via the Flipper app or USB).
+      </details>
+    </footer>
+  </article>
+
   <footer>
     <div class="title">Pagger — unified generator/decoder</div>
     <div><a href="https://github.com/meoker/pagger">Original by meoker</a></div>
@@ -521,6 +542,7 @@
     var name = modelToken(current) + '_st' + rng(sf, st) + '_pg' + rng(pf, pt) +
                '_' + actionToken(current, action) + '_x' + repeats;
     showPreview('raw-preview', content);
+    rememberFile(name + '.sub', content);
     download(content, name + '.sub');
   }
 
@@ -531,6 +553,7 @@
     var content = keyFile(current, hex);
     var name = modelToken(current) + '_st' + station + '_' + current.special.suffix;
     showPreview('special-preview', content);
+    rememberFile(name + '.sub', content);
     download(content, name + '.sub');
   }
 
@@ -540,7 +563,136 @@
     el.classList.remove('hidden');
   }
 
+  /* =====================================================================
+     EXPERIMENTAL: push the generated .sub straight to a Flipper over BLE.
+     Implements the minimum of Flipper's protobuf RPC (storage_write) over
+     its BLE Serial service. The official Flipper app must be DISCONNECTED
+     (one BLE owner at a time). Android Chrome only (Web Bluetooth).
+     ===================================================================== */
+  var FZ = {
+    SERVICE: '8fe5b3d5-2e7f-4a98-2a48-7acc60fe0000',
+    TX:      '19ed82ae-ed21-4c9d-4145-228e61fe0000', // notify  (flipper -> us)
+    RX:      '19ed82ae-ed21-4c9d-4145-228e62fe0000', // write   (us -> flipper)
+    FLOW:    '19ed82ae-ed21-4c9d-4145-228e63fe0000', // notify  (rx buffer credit)
+    device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: []
+  };
+  var lastFile = null;
+
+  function rememberFile(name, content) {
+    lastFile = { name: name, content: content };
+    flipperUi();
+  }
+  function flog(msg) {
+    var el = document.getElementById('fz-log');
+    if (el) { el.textContent += msg + '\n'; el.scrollTop = el.scrollHeight; }
+  }
+  function flipperUi() {
+    var send = document.getElementById('fz-send');
+    if (!send) return;
+    var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
+    send.disabled = !(connected && lastFile);
+    document.getElementById('fz-status').textContent =
+      (navigator.bluetooth ? (connected ? 'Connected' + (FZ.name ? ' to ' + FZ.name : '') : 'Not connected')
+                           : 'Web Bluetooth not available in this browser');
+    send.textContent = lastFile ? ('Send "' + lastFile.name + '" to Flipper') : 'Generate a file first';
+  }
+
+  // ---- tiny protobuf encoder (only what storage_write needs) ----
+  function pbVarint(n) { var b = []; n = n >>> 0; while (true) { var x = n & 0x7f; n = n >>> 7; if (n) b.push(x | 0x80); else { b.push(x); break; } } return b; }
+  function pbTag(f, w) { return pbVarint((f << 3) | w); }
+  function pbVar(f, v) { return pbTag(f, 0).concat(pbVarint(v)); }
+  function pbBytes(f, arr) { return pbTag(f, 2).concat(pbVarint(arr.length)).concat(arr); }
+  function utf8(s) { return Array.from(new TextEncoder().encode(s)); }
+
+  // one delimited PB_Main carrying a storage_write_request chunk
+  function buildWriteMain(path, chunk, hasNext) {
+    var file = pbBytes(4, chunk);                                   // File{ data = chunk }
+    var wreq = pbBytes(1, utf8(path)).concat(pbBytes(2, file));     // WriteRequest{ path, file }
+    var main = pbVar(1, 1);                                         // command_id = 1
+    if (hasNext) main = main.concat(pbVar(3, 1));                   // has_next = true
+    main = main.concat(pbBytes(11, wreq));                          // storage_write_request = 11
+    return pbVarint(main.length).concat(main);                     // length-delimited
+  }
+
+  function waitCredit() { return new Promise(function (res) { FZ.creditWaiters.push(res); }); }
+  function grantCredit(v) { FZ.credit = v; var w = FZ.creditWaiters; FZ.creditWaiters = []; w.forEach(function (r) { r(); }); }
+
+  async function flipperConnect() {
+    if (!navigator.bluetooth) { flog('Web Bluetooth not supported here (use Chrome on Android).'); return; }
+    try {
+      flog('Requesting device… (pick your Flipper)');
+      FZ.device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'Flipper' }], optionalServices: [FZ.SERVICE]
+      });
+      FZ.name = FZ.device.name;
+      FZ.device.addEventListener('gattserverdisconnected', function () { flog('Disconnected.'); flipperUi(); });
+      flog('Connecting GATT…');
+      var server = await FZ.device.gatt.connect();
+      var svc = await server.getPrimaryService(FZ.SERVICE);
+      FZ.rx = await svc.getCharacteristic(FZ.RX);
+      var tx = await svc.getCharacteristic(FZ.TX);
+      var flow = await svc.getCharacteristic(FZ.FLOW);
+
+      await tx.startNotifications();
+      tx.addEventListener('characteristicvaluechanged', function (e) {
+        var d = new Uint8Array(e.target.value.buffer);
+        flog('← ' + d.length + ' bytes: ' + Array.from(d).map(function (b) { return b.toString(16).padStart(2, '0'); }).join(' ').slice(0, 80));
+        var st = peekStatus(d);
+        if (st !== null) flog(st === 0 ? '✓ Flipper reported OK' : '✗ Flipper error status ' + st);
+      });
+
+      try { var v = await flow.readValue(); FZ.buff = FZ.credit = v.getUint32(0, false); }
+      catch (e) { flog('(flow read failed, assuming ' + FZ.buff + ' byte buffer)'); }
+      await flow.startNotifications();
+      flow.addEventListener('characteristicvaluechanged', function (e) { grantCredit(e.target.value.getUint32(0, false)); });
+
+      flog('Connected. RX buffer ≈ ' + FZ.buff + ' bytes. Ready to send.');
+      flipperUi();
+    } catch (err) { flog('Connect failed: ' + err.message); flipperUi(); }
+  }
+
+  // very light response peek: find command_status (field 2, varint) in first message
+  function peekStatus(d) {
+    // skip leading length varint
+    var i = 0; while (i < d.length && (d[i] & 0x80)) i++; i++;
+    while (i < d.length) {
+      var key = d[i++]; var field = key >> 3, wire = key & 7;
+      if (wire === 0) { var val = 0, sh = 0; while (i < d.length && (d[i] & 0x80)) { val |= (d[i++] & 0x7f) << sh; sh += 7; } val |= (d[i++] & 0x7f) << sh; if (field === 2) return val; }
+      else if (wire === 2) { var len = d[i++]; i += len; }
+      else return null;
+    }
+    return null;
+  }
+
+  async function flipperSend() {
+    if (!FZ.rx || !lastFile) return;
+    try {
+      var path = '/ext/subghz/' + lastFile.name;
+      var data = utf8(lastFile.content);
+      flog('Writing ' + data.length + ' bytes → ' + path);
+
+      // split file into chunks; each becomes one storage_write_request (has_next on all but last)
+      var DATA = 512, stream = [];
+      for (var o = 0; o < data.length; o += DATA) {
+        var chunk = data.slice(o, o + DATA);
+        stream = stream.concat(buildWriteMain(path, chunk, (o + DATA) < data.length));
+      }
+      // last (empty) message with has_next=false already covered when single/last chunk; ensure terminator
+      var bytes = Uint8Array.from(stream);
+
+      var WRITE = 20, off = 0; // 20-byte ATT writes = safe under any MTU
+      while (off < bytes.length) {
+        if (FZ.credit <= 0) { flog('…waiting for buffer credit'); await waitCredit(); }
+        var n = Math.min(WRITE, FZ.credit, bytes.length - off);
+        await FZ.rx.writeValueWithoutResponse(bytes.slice(off, off + n));
+        off += n; FZ.credit -= n;
+      }
+      flog('Sent ' + bytes.length + ' bytes. Check ' + path + ' on the Flipper.');
+    } catch (err) { flog('Send failed: ' + err.message); }
+  }
+
   selectModel();
+  flipperUi();
 </script>
 </body>
 </html>
