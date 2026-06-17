@@ -215,7 +215,8 @@
         <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
         then tap Connect and pick your Flipper. After sending, <strong>Transmit</strong> opens the file in the
-        Sub-GHz app and sends it (it briefly takes over the Flipper screen). This is experimental — if it fails,
+        Sub-GHz app and sends it (it briefly takes over the Flipper screen) — for this the Flipper must be on
+        the <strong>desktop with no app open</strong> (the loader runs one app at a time). This is experimental — if it fails,
         the log shows why; the Download button always works as a fallback (import via the Flipper app or USB).
       </details>
     </footer>
@@ -580,7 +581,8 @@
     TX:      '19ed82ae-ed21-4c9d-4145-228e61fe0000', // notify  (flipper -> us)
     RX:      '19ed82ae-ed21-4c9d-4145-228e62fe0000', // write   (us -> flipper)
     FLOW:    '19ed82ae-ed21-4c9d-4145-228e63fe0000', // notify  (rx buffer credit)
-    device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: []
+    device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: [],
+    rxbuf: new Uint8Array(0), waiters: []
   };
   var lastFile = null;
 
@@ -668,19 +670,33 @@
   async function flipperTransmit() {
     if (!FZ.rx || !FZ.lastPath) return;
     try {
-      flog('▶ Launching Sub-GHz (RPC mode)…');
+      flog('▶ Launching Sub-GHz (RPC mode)… (Flipper must be on the desktop, no app open)');
+      // register both waiters BEFORE writing so we can't miss a fast APP_STARTED
+      var startedP = waitForRpc(function (m) { return m.appState === 1; }, 8000).catch(function () { return null; });
+      var ackP = waitForRpc(function (m) { return m.cmd === 10; }, 5000).catch(function () { return null; });
       await flipperWrite(Uint8Array.from(appStart('Sub-GHz')));
-      await sleep(1000);
-      flog('Loading ' + FZ.lastPath);
+      var ack = await ackP;
+      if (ack && ack.status !== 0) {
+        flog(ack.status === 17
+          ? '✗ Another app is open on the Flipper. Press Back to return to the desktop, then Transmit again.'
+          : '✗ Launch was refused (status ' + ack.status + '). Put the Flipper on the desktop and retry.');
+        return;
+      }
+      if (!(await startedP)) {
+        flog('✗ Sub-GHz did not start. Make sure the Flipper is on the desktop (no app open) and retry.');
+        return;
+      }
+      flog('App started. Loading ' + FZ.lastPath);
       await flipperWrite(Uint8Array.from(appLoadFile(FZ.lastPath)));
-      await sleep(500);
+      try { await waitForRpc(function (m) { return m.cmd === 11 && (m.status === 0); }, 5000); }
+      catch (e) { flog('(load not confirmed within 5s — transmitting anyway)'); }
       flog('Transmitting…');
       await flipperWrite(Uint8Array.from(appButtonPress()));
       await sleep(2500);                                   // hold "send" so the burst repeats
       await flipperWrite(Uint8Array.from(appButtonRelease()));
       await sleep(300);
       await flipperWrite(Uint8Array.from(appExit()));
-      flog('✓ Transmit sequence sent (watch the Flipper screen).');
+      flog('✓ Transmit sequence complete.');
     } catch (err) { flog('Transmit failed: ' + err.message); }
   }
 
@@ -695,6 +711,7 @@
         acceptAllDevices: true, optionalServices: [FZ.SERVICE]
       });
       FZ.name = FZ.device.name;
+      FZ.rxbuf = new Uint8Array(0); FZ.waiters = [];
       FZ.device.addEventListener('gattserverdisconnected', function () { flog('Disconnected.'); flipperUi(); });
       flog('Connecting GATT…');
       var server = await FZ.device.gatt.connect();
@@ -706,11 +723,10 @@
       await tx.startNotifications();
       tx.addEventListener('characteristicvaluechanged', function (e) {
         var d = new Uint8Array(e.target.value.buffer);
-        flog('← ' + d.length + ' bytes: ' + Array.from(d).map(function (b) { return b.toString(16).padStart(2, '0'); }).join(' ').slice(0, 80));
-        var st = peekStatus(d);
-        if (st !== null) flog(st === 0 ? '✓ Flipper reported OK'
-          : st === 6 ? '✓ folder already exists (ok)'           // ERROR_STORAGE_EXIST
-          : '✗ Flipper error status ' + st);
+        var merged = new Uint8Array(FZ.rxbuf.length + d.length);
+        merged.set(FZ.rxbuf); merged.set(d, FZ.rxbuf.length);
+        FZ.rxbuf = merged;
+        rpcConsume();   // parse complete PB_Main responses out of the buffer
       });
 
       try { var v = await flow.readValue(); FZ.buff = FZ.credit = v.getUint32(0, false); }
@@ -723,17 +739,49 @@
     } catch (err) { flog('Connect failed: ' + err.message); flipperUi(); }
   }
 
-  // very light response peek: find command_status (field 2, varint) in first message
-  function peekStatus(d) {
-    // skip leading length varint
-    var i = 0; while (i < d.length && (d[i] & 0x80)) i++; i++;
+  // ---- RPC response parsing (length-delimited PB_Main stream) ----
+  function readVarint(d, i) { var v = 0, sh = 0; while (i < d.length) { var by = d[i++]; v |= (by & 0x7f) << sh; sh += 7; if (!(by & 0x80)) break; } return [v >>> 0, i]; }
+
+  function parseMain(d) {
+    var i = 0, out = { cmd: 0, status: 0, tag: 0, appState: null };
     while (i < d.length) {
-      var key = d[i++]; var field = key >> 3, wire = key & 7;
-      if (wire === 0) { var val = 0, sh = 0; while (i < d.length && (d[i] & 0x80)) { val |= (d[i++] & 0x7f) << sh; sh += 7; } val |= (d[i++] & 0x7f) << sh; if (field === 2) return val; }
-      else if (wire === 2) { var len = d[i++]; i += len; }
-      else return null;
+      var k = readVarint(d, i); i = k[1]; var field = k[0] >> 3, wire = k[0] & 7;
+      if (wire === 0) { var v = readVarint(d, i); i = v[1]; if (field === 1) out.cmd = v[0]; else if (field === 2) out.status = v[0]; }
+      else if (wire === 2) {
+        var L = readVarint(d, i); i = L[1]; var sub = d.slice(i, i + L[0]); i += L[0]; out.tag = field;
+        if (field === 58) { // app_state_response { state = 1 }
+          var j = 0; while (j < sub.length) { var kk = readVarint(sub, j); j = kk[1]; var f2 = kk[0] >> 3, w2 = kk[0] & 7;
+            if (w2 === 0) { var vv = readVarint(sub, j); j = vv[1]; if (f2 === 1) out.appState = vv[0]; }
+            else if (w2 === 2) { var LL = readVarint(sub, j); j = LL[1]; j += LL[0]; } else break; }
+        }
+      } else if (wire === 5) { i += 4; } else if (wire === 1) { i += 8; } else break;
     }
-    return null;
+    return out;
+  }
+
+  function rpcConsume() {
+    var b = FZ.rxbuf, i = 0;
+    while (i < b.length) {
+      var L = readVarint(b, i); var lenEnd = L[1];
+      if (lenEnd === i) break;                 // incomplete length
+      if (lenEnd + L[0] > b.length) break;      // incomplete message
+      onRpcMessage(parseMain(b.slice(lenEnd, lenEnd + L[0])));
+      i = lenEnd + L[0];
+    }
+    FZ.rxbuf = b.slice(i);
+  }
+
+  function onRpcMessage(m) {
+    if (m.appState !== null) flog('  ← app ' + (m.appState === 1 ? 'STARTED' : m.appState === 0 ? 'CLOSED' : m.appState));
+    else flog('  ← cmd ' + m.cmd + ' status ' + m.status + (m.status === 0 ? ' (OK)' : m.status === 6 ? ' (exists, ok)' : ' (error)'));
+    FZ.waiters = FZ.waiters.filter(function (w) { if (w.test(m)) { clearTimeout(w.timer); w.resolve(m); return false; } return true; });
+  }
+
+  function waitForRpc(test, ms) {
+    return new Promise(function (res, rej) {
+      var t = setTimeout(function () { FZ.waiters = FZ.waiters.filter(function (w) { return w.timer !== t; }); rej(new Error('timeout')); }, ms);
+      FZ.waiters.push({ test: test, resolve: res, timer: t });
+    });
   }
 
   async function flipperSend() {
