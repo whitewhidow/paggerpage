@@ -89,7 +89,7 @@
     <footer>
       Every row decodes the same bits — the numbers alone can't tell you the model.
       Rows shown <span style="color:#d32f2f;font-weight:700">in red (&#10007;)</span> have a pager number
-      outside that hardware's real capacity, so that model is ruled out.
+      or action value that hardware can't actually produce, so that model is ruled out.
       For the rest, <strong>match the "Signal fingerprint" against your Flipper read screen</strong>
       (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values), then hit
       <strong>Use</strong> on the right row to load it into the generators.
@@ -245,6 +245,7 @@
       realPager: [1, 999], // hardware: up to 999 pagers
       actionOptions: [{ value: '0', label: 'Ring (0)' }, { value: '1', label: 'Mute (1)' }],
       actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
+      validActions: [0, 1], // 1-bit field: every value is valid
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
       decode: function (bin) {
@@ -275,6 +276,7 @@
       actionName: function (bits) {
         return bits === '0010' ? 'Call (0010)' : bits === '1111' ? 'Turn-off (1111)' : 'bits ' + bits;
       },
+      validActions: ['0010', '1111'], // only call + turn-off are real of the 16 combos
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 999, action 1111).' },
       decode: function (bin) {
@@ -328,6 +330,7 @@
       // TD174 carries a fixed 2-bit action: 0 = call/page, 3 = desync. Not user-chosen per call.
       actionOptions: [{ value: '0', label: 'Call / Page (0)' }],
       actionName: function (a) { return a == 3 ? 'Desync (3)' : a == 0 ? 'Call (0)' : 'action ' + a; },
+      validActions: [0, 3], // of 0-3, only call (0) and desync (3) are real
       special: { label: 'DESYNC FILE', suffix: 'desync',
                  info: 'Desync file for a given station (action 3, pager 237).' },
       decode: function (bin) {
@@ -427,15 +430,20 @@
       var m = MODELS[id];
       var n = m.decode(bin);
       var rp = m.realPager;
-      var pagerBad = (n.pager < rp[0] || n.pager > rp[1]);  // outside real hardware capacity → impossible
+      var pagerBad = (n.pager < rp[0] || n.pager > rp[1]);          // outside real pager capacity → impossible
+      var actionBad = (m.validActions.indexOf(n.action) === -1);    // action bits this hardware never sends → impossible
+      var ruledOut = pagerBad || actionBad;
       var pagerCell = pagerBad
         ? '<td class="bad" title="Outside ' + m.name + ' pager range ' + rp[0] + '-' + rp[1] + '">' + n.pager + '</td>'
         : '<td>' + n.pager + '</td>';
-      rows += '<tr' + (pagerBad ? ' class="ruled-out"' : '') + '>' +
-        '<td>' + m.name + (pagerBad ? '<span class="xmark" title="Ruled out: pager number too high for this hardware">&#10007;</span>' : '') + '</td>' +
+      var actionCell = actionBad
+        ? '<td class="bad" title="' + m.name + ' never uses this action value">' + m.actionName(n.action) + '</td>'
+        : '<td>' + m.actionName(n.action) + '</td>';
+      rows += '<tr' + (ruledOut ? ' class="ruled-out"' : '') + '>' +
+        '<td>' + m.name + (ruledOut ? '<span class="xmark" title="Ruled out: an impossible value for this hardware">&#10007;</span>' : '') + '</td>' +
         '<td>' + n.station + '</td>' +
         pagerCell +
-        '<td>' + m.actionName(n.action) + '</td>' +
+        actionCell +
         '<td><small>' + fingerprint(m) + '</small></td>' +
         '<td style="text-align:right"><button class="outline" style="margin:0;padding:.1rem .6rem" ' +
           'onclick="useDecoded(\'' + id + '\')">Use &#9656;</button></td>' +
