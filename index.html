@@ -198,7 +198,7 @@
   <article id="flipper-pane" class="blue-theme">
     <header><h3>SEND TO FLIPPER &nbsp;(Bluetooth · experimental)</h3></header>
     <div class="grid">
-      <button onclick="flipperConnect()">Connect Flipper</button>
+      <button id="fz-connect" onclick="flipperToggle()">Connect Flipper</button>
       <button id="fz-send" onclick="flipperSend()" disabled>Generate a file first</button>
     </div>
     <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
@@ -206,7 +206,7 @@
     <footer>
       <details>
         <summary>Read me before using</summary>
-        Writes the last generated file straight to <code>/ext/subghz/</code> on your Flipper over BLE.
+        Writes the last generated file straight to <code>/ext/subghz/pagger/</code> on your Flipper over BLE (the folder is created if missing).
         <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
         then tap Connect and pick your Flipper. This is experimental — if it fails, the log shows why; the
@@ -591,10 +591,20 @@
     if (!send) return;
     var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
     send.disabled = !(connected && lastFile);
+    document.getElementById('fz-connect').textContent = connected ? 'Disconnect' : 'Connect Flipper';
     document.getElementById('fz-status').textContent =
       (navigator.bluetooth ? (connected ? 'Connected' + (FZ.name ? ' to ' + FZ.name : '') : 'Not connected')
                            : 'Web Bluetooth not available in this browser');
     send.textContent = lastFile ? ('Send "' + lastFile.name + '" to Flipper') : 'Generate a file first';
+  }
+
+  function flipperToggle() {
+    var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
+    if (connected) flipperDisconnect(); else flipperConnect();
+  }
+  function flipperDisconnect() {
+    try { if (FZ.device && FZ.device.gatt && FZ.device.gatt.connected) { flog('Disconnecting…'); FZ.device.gatt.disconnect(); } }
+    catch (e) { flog('Disconnect error: ' + e.message); }
   }
 
   // ---- tiny protobuf encoder (only what storage_write needs) ----
@@ -605,13 +615,20 @@
   function utf8(s) { return Array.from(new TextEncoder().encode(s)); }
 
   // one delimited PB_Main carrying a storage_write_request chunk
-  function buildWriteMain(path, chunk, hasNext) {
+  function buildWriteMain(path, chunk, hasNext, cmdId) {
     var file = pbBytes(4, chunk);                                   // File{ data = chunk }
     var wreq = pbBytes(1, utf8(path)).concat(pbBytes(2, file));     // WriteRequest{ path, file }
-    var main = pbVar(1, 1);                                         // command_id = 1
+    var main = pbVar(1, cmdId);                                     // command_id
     if (hasNext) main = main.concat(pbVar(3, 1));                   // has_next = true
     main = main.concat(pbBytes(11, wreq));                          // storage_write_request = 11
     return pbVarint(main.length).concat(main);                     // length-delimited
+  }
+
+  // delimited PB_Main carrying a storage_mkdir_request (creates the folder)
+  function buildMkdirMain(path, cmdId) {
+    var req = pbBytes(1, utf8(path));                               // MkdirRequest{ path }
+    var main = pbVar(1, cmdId).concat(pbBytes(13, req));            // storage_mkdir_request = 13
+    return pbVarint(main.length).concat(main);
   }
 
   function waitCredit() { return new Promise(function (res) { FZ.creditWaiters.push(res); }); }
@@ -641,7 +658,9 @@
         var d = new Uint8Array(e.target.value.buffer);
         flog('← ' + d.length + ' bytes: ' + Array.from(d).map(function (b) { return b.toString(16).padStart(2, '0'); }).join(' ').slice(0, 80));
         var st = peekStatus(d);
-        if (st !== null) flog(st === 0 ? '✓ Flipper reported OK' : '✗ Flipper error status ' + st);
+        if (st !== null) flog(st === 0 ? '✓ Flipper reported OK'
+          : st === 6 ? '✓ folder already exists (ok)'           // ERROR_STORAGE_EXIST
+          : '✗ Flipper error status ' + st);
       });
 
       try { var v = await flow.readValue(); FZ.buff = FZ.credit = v.getUint32(0, false); }
@@ -670,17 +689,18 @@
   async function flipperSend() {
     if (!FZ.rx || !lastFile) return;
     try {
-      var path = '/ext/subghz/' + lastFile.name;
+      var dir = '/ext/subghz/pagger';
+      var path = dir + '/' + lastFile.name;
       var data = utf8(lastFile.content);
-      flog('Writing ' + data.length + ' bytes → ' + path);
+      flog('Ensuring ' + dir + ' exists, then writing ' + data.length + ' bytes → ' + path);
 
-      // split file into chunks; each becomes one storage_write_request (has_next on all but last)
-      var DATA = 512, stream = [];
+      // 1) create the folder (ignored if it already exists), then 2) write the file
+      var stream = buildMkdirMain(dir, 1);
+      var DATA = 512;
       for (var o = 0; o < data.length; o += DATA) {
         var chunk = data.slice(o, o + DATA);
-        stream = stream.concat(buildWriteMain(path, chunk, (o + DATA) < data.length));
+        stream = stream.concat(buildWriteMain(path, chunk, (o + DATA) < data.length, 2));
       }
-      // last (empty) message with has_next=false already covered when single/last chunk; ensure terminator
       var bytes = Uint8Array.from(stream);
 
       var WRITE = 20, off = 0; // 20-byte ATT writes = safe under any MTU
