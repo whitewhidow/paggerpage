@@ -32,6 +32,9 @@
     .readout { font-family: monospace; background: var(--code-background-color); padding: .5rem .75rem; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
     textarea.preview { font-family: monospace; font-size: 12px; min-height: 9rem; white-space: pre; overflow-wrap: normal; }
     .hidden { display: none !important; }
+    tr.ruled-out { opacity: .5; }
+    td.bad { color: #d32f2f; font-weight: 700; }
+    .xmark { color: #d32f2f; font-weight: 700; margin-left: .25rem; }
     @media (max-width: 992px) {
       .grid .grid { display: flex; }
       .grid .grid div { display: flex; flex-direction: column; flex: 1; }
@@ -85,10 +88,13 @@
     </div>
     <footer>
       Every row decodes the same bits — the numbers alone can't tell you the model.
-      <strong>Match the "Signal fingerprint" against your Flipper read screen</strong>
-      (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values) to know which pager you have,
-      then hit <strong>Use</strong> on that row to load it into the generators.
-      <br><small>Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — they're indistinguishable; pick your physical model.</small>
+      Rows shown <span style="color:#d32f2f;font-weight:700">in red (&#10007;)</span> have a pager number
+      outside that hardware's real capacity, so that model is ruled out.
+      For the rest, <strong>match the "Signal fingerprint" against your Flipper read screen</strong>
+      (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values), then hit
+      <strong>Use</strong> on the right row to load it into the generators.
+      <br><small>Real pager capacity: T119 1–999 · TD157 1–998 · TD165 1–999 · TD174 1–10.
+      Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — pick your physical model.</small>
     </footer>
   </article>
 
@@ -236,6 +242,7 @@
       name: 'Retekess T119', freq: 433920000, protocol: 'Princeton', bit: 24, te: 271,
       hasAction: true,
       ranges: { station: [0, 8191], pager: [0, 999], action: [0, 1] },
+      realPager: [1, 999], // hardware: up to 999 pagers
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
       decode: function (bin) {
@@ -259,6 +266,7 @@
       name: 'Retekess TD157', freq: 433920000, protocol: 'Princeton', bit: 24, te: 212,
       hasAction: false,
       ranges: { station: [0, 1023], pager: [0, 999] },
+      realPager: [1, 998], // hardware: calls up to 998 pagers
       keyAction: '0010', turnoffAction: '1111',
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 999, action 1111).' },
@@ -282,6 +290,7 @@
       name: 'Retekess TD165', freq: 433920000, protocol: 'Princeton', bit: 24, te: 271,
       hasAction: true,
       ranges: { station: [0, 8191], pager: [0, 999], action: [0, 1] },
+      realPager: [1, 999], // hardware: up to 999 pagers
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
       decode: function (bin) {
@@ -305,6 +314,7 @@
       name: 'Retekess TD174', freq: 433889000, protocol: 'SMC5326', bit: 25, te: 326,
       hasAction: false,
       ranges: { station: [0, 8191], pager: [0, 10] },
+      realPager: [1, 10], // hardware: fixed 10-channel base
       special: { label: 'DESYNC FILE', suffix: 'desync',
                  info: 'Desync file for a given station (action 3, pager 237).' },
       decode: function (bin) {
@@ -400,10 +410,15 @@
     MODEL_ORDER.forEach(function (id) {
       var m = MODELS[id];
       var n = m.decode(bin);
-      rows += '<tr>' +
-        '<td>' + m.name + '</td>' +
+      var rp = m.realPager;
+      var pagerBad = (n.pager < rp[0] || n.pager > rp[1]);  // outside real hardware capacity → impossible
+      var pagerCell = pagerBad
+        ? '<td class="bad" title="Outside ' + m.name + ' pager range ' + rp[0] + '-' + rp[1] + '">' + n.pager + '</td>'
+        : '<td>' + n.pager + '</td>';
+      rows += '<tr' + (pagerBad ? ' class="ruled-out"' : '') + '>' +
+        '<td>' + m.name + (pagerBad ? '<span class="xmark" title="Ruled out: pager number too high for this hardware">&#10007;</span>' : '') + '</td>' +
         '<td>' + n.station + '</td>' +
-        '<td>' + n.pager + '</td>' +
+        pagerCell +
         '<td>' + (n.action !== undefined ? n.action : '&mdash;') + '</td>' +
         '<td><small>' + fingerprint(m) + '</small></td>' +
         '<td style="text-align:right"><button class="outline" style="margin:0;padding:.1rem .6rem" ' +
