@@ -667,6 +667,8 @@
   function appButtonRelease(){ return buildAppFrame(50, [], 13); }  // stop TX
   function appExit()        { return buildAppFrame(47, [], 14); }
 
+  async function safeExit() { try { await flipperWrite(Uint8Array.from(appExit())); } catch (e) {} }
+
   async function flipperTransmit() {
     if (!FZ.rx || !FZ.lastPath) return;
     try {
@@ -687,10 +689,12 @@
         return;
       }
       flog('App started. Loading ' + FZ.lastPath);
+      var loadP = waitForRpc(function (m) { return m.cmd === 11; }, 6000).catch(function () { return null; });
       await flipperWrite(Uint8Array.from(appLoadFile(FZ.lastPath)));
-      try { await waitForRpc(function (m) { return m.cmd === 11 && (m.status === 0); }, 5000); }
-      catch (e) { flog('(load not confirmed within 5s — transmitting anyway)'); }
-      flog('Transmitting…');
+      var load = await loadP;
+      if (!load) { flog('✗ No load response (file missing/locked?). Aborting before transmit.'); await safeExit(); return; }
+      if (load.status !== 0) { flog('✗ Load failed (status ' + load.status + '): file may be corrupt or unsupported. Aborting.'); await safeExit(); return; }
+      flog('File loaded OK. Transmitting…');
       await flipperWrite(Uint8Array.from(appButtonPress()));
       await sleep(2500);                                   // hold "send" so the burst repeats
       await flipperWrite(Uint8Array.from(appButtonRelease()));
