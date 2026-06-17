@@ -251,7 +251,7 @@
       actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
       validActions: [0, 1], // 1-bit field: every value is valid
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
-                 info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
+                 info: 'Turns off every pager on the station. The trigger is a reserved broadcast address (pager 1005 — above the normal 1–999 range, meaning "all pagers"); the action bit is irrelevant here.' },
       decode: function (bin) {
         return {
           station: binToDec(reverse(bin.substring(0, 13))),
@@ -282,7 +282,7 @@
       },
       validActions: ['0010', '1111'], // only call + turn-off are real of the 16 combos
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
-                 info: 'Turns off all pagers of a given station (pager 999, action 1111).' },
+                 info: 'Turns off every pager on the station. Here the trigger is a dedicated turn-off action (1111) — different from the normal call action (0010) — sent to pager 999.' },
       decode: function (bin) {
         return {
           station: binToDec(bin.substring(0, 10)),
@@ -309,7 +309,7 @@
       actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
       validActions: [0, 1], // 1-bit field: every value is valid
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
-                 info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
+                 info: 'Turns off every pager on the station. The trigger is a reserved broadcast address (pager 1005 — above the normal 1–999 range, meaning "all pagers"); the action bit is irrelevant here.' },
       decode: function (bin) {
         return {
           station: binToDec(reverse(bin.substring(0, 13))),
@@ -337,7 +337,7 @@
       actionName: function (a) { return a == 3 ? 'Desync (3)' : a == 0 ? 'Call (0)' : 'action ' + a; },
       validActions: [0, 3], // of 0-3, only call (0) and desync (3) are real
       special: { label: 'DESYNC FILE', suffix: 'desync',
-                 info: 'Desync file for a given station (action 3, pager 237).' },
+                 info: 'Desync command for the station. The trigger is a dedicated desync action (3) — different from the normal call action (0) — sent to pager 237.' },
       decode: function (bin) {
         return {
           station: binToDec(reverse(bin.substring(0, 13))),
