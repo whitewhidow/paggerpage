@@ -110,9 +110,9 @@
         <label for="k-pager">Pager:</label>
         <input type="number" id="k-pager" min="0">
       </div>
-      <div class="action-field">
+      <div>
         <label for="k-action">Action:</label>
-        <input type="number" id="k-action" min="0" max="1" placeholder="0 ring - 1 mute">
+        <select id="k-action"></select>
       </div>
     </div>
     <div class="grid">
@@ -148,10 +148,10 @@
           <input type="number" id="r-pager-to" min="0">
         </div>
       </div>
-      <div class="grid action-field">
+      <div class="grid">
         <div>
           <label for="r-action">Action:</label>
-          <input type="number" id="r-action" min="0" max="1" placeholder="0 ring - 1 mute">
+          <select id="r-action"></select>
         </div>
       </div>
     </div>
@@ -243,6 +243,8 @@
       hasAction: true,
       ranges: { station: [0, 8191], pager: [0, 999], action: [0, 1] },
       realPager: [1, 999], // hardware: up to 999 pagers
+      actionOptions: [{ value: '0', label: 'Ring (0)' }, { value: '1', label: 'Mute (1)' }],
+      actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
       decode: function (bin) {
@@ -268,12 +270,18 @@
       ranges: { station: [0, 1023], pager: [0, 999] },
       realPager: [1, 998], // hardware: calls up to 998 pagers
       keyAction: '0010', turnoffAction: '1111',
+      // TD157 carries a fixed 4-bit action: 0010 = call/page, 1111 = turn-off. Not user-chosen per call.
+      actionOptions: [{ value: '0010', label: 'Call / Page (0010)' }],
+      actionName: function (bits) {
+        return bits === '0010' ? 'Call (0010)' : bits === '1111' ? 'Turn-off (1111)' : 'bits ' + bits;
+      },
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 999, action 1111).' },
       decode: function (bin) {
         return {
           station: binToDec(bin.substring(0, 10)),
-          pager:   binToDec(bin.substring(10, 20))
+          pager:   binToDec(bin.substring(10, 20)),
+          action:  bin.substring(20, 24)
         };
       },
       keyHex: function (station, pager, actionBits) {
@@ -291,6 +299,8 @@
       hasAction: true,
       ranges: { station: [0, 8191], pager: [0, 999], action: [0, 1] },
       realPager: [1, 999], // hardware: up to 999 pagers
+      actionOptions: [{ value: '0', label: 'Ring (0)' }, { value: '1', label: 'Mute (1)' }],
+      actionName: function (a) { return a == 1 ? 'Mute (1)' : 'Ring (0)'; },
       special: { label: 'TURN-OFF FILE', suffix: 'turnoff',
                  info: 'Turns off all pagers of a given station (pager 1005, action 0).' },
       decode: function (bin) {
@@ -315,12 +325,16 @@
       hasAction: false,
       ranges: { station: [0, 8191], pager: [0, 10] },
       realPager: [1, 10], // hardware: fixed 10-channel base
+      // TD174 carries a fixed 2-bit action: 0 = call/page, 3 = desync. Not user-chosen per call.
+      actionOptions: [{ value: '0', label: 'Call / Page (0)' }],
+      actionName: function (a) { return a == 3 ? 'Desync (3)' : a == 0 ? 'Call (0)' : 'action ' + a; },
       special: { label: 'DESYNC FILE', suffix: 'desync',
                  info: 'Desync file for a given station (action 3, pager 237).' },
       decode: function (bin) {
         return {
           station: binToDec(reverse(bin.substring(0, 13))),
-          pager:   binToDec(reverse(bin.substring(15, 23)))
+          pager:   binToDec(reverse(bin.substring(15, 23))),
+          action:  binToDec(reverse(bin.substring(13, 15)))
         };
       },
       // note: source orders the payload station, action, pager and appends a trailing 0
@@ -357,10 +371,12 @@
     current = MODELS[id];
     var r = current.ranges;
 
-    // action visibility
-    document.querySelectorAll('.action-field').forEach(function (e) {
-      current.hasAction ? e.classList.remove('hidden') : e.classList.add('hidden');
-    });
+    // populate the action dropdowns with this model's selectable actions
+    var optsHtml = current.actionOptions.map(function (o) {
+      return '<option value="' + o.value + '">' + o.label + '</option>';
+    }).join('');
+    document.getElementById('k-action').innerHTML = optsHtml;
+    document.getElementById('r-action').innerHTML = optsHtml;
 
     // ranges + placeholders
     setRange('k-station', r.station); setRange('s-station', r.station);
@@ -419,7 +435,7 @@
         '<td>' + m.name + (pagerBad ? '<span class="xmark" title="Ruled out: pager number too high for this hardware">&#10007;</span>' : '') + '</td>' +
         '<td>' + n.station + '</td>' +
         pagerCell +
-        '<td>' + (n.action !== undefined ? n.action : '&mdash;') + '</td>' +
+        '<td>' + m.actionName(n.action) + '</td>' +
         '<td><small>' + fingerprint(m) + '</small></td>' +
         '<td style="text-align:right"><button class="outline" style="margin:0;padding:.1rem .6rem" ' +
           'onclick="useDecoded(\'' + id + '\')">Use &#9656;</button></td>' +
@@ -443,18 +459,25 @@
     document.getElementById('r-pager-from').value = 1;
     document.getElementById('r-pager-to').value = 100;
     document.getElementById('s-station').value = n.station;
-    if (MODELS[id].hasAction) {
-      document.getElementById('k-action').value = n.action;
-      document.getElementById('r-action').value = n.action;
-    }
+    // preselect the decoded action if it's a selectable per-call action for this model
+    setSelectIfPresent('k-action', String(n.action));
+    setSelectIfPresent('r-action', String(n.action));
     document.getElementById('key-pane').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // set a <select> to a value only if that option exists (otherwise leave its default)
+  function setSelectIfPresent(elId, value) {
+    var el = document.getElementById(elId);
+    for (var i = 0; i < el.options.length; i++) {
+      if (el.options[i].value === value) { el.value = value; return; }
+    }
   }
 
   /* ---------- GENERATE: key ---------- */
   function genKeyFile() {
     var station = Number(document.getElementById('k-station').value);
     var pager = Number(document.getElementById('k-pager').value);
-    var action = current.hasAction ? Number(document.getElementById('k-action').value) : undefined;
+    var action = document.getElementById('k-action').value; // string: '0'/'1' or '0010' (TD157)
 
     var hex = current.keyHex(station, pager, action);
     var content = keyFile(current, hex);
@@ -469,7 +492,7 @@
     var st = Number(document.getElementById('r-station-to').value);
     var pf = Number(document.getElementById('r-pager-from').value);
     var pt = Number(document.getElementById('r-pager-to').value);
-    var action = current.hasAction ? Number(document.getElementById('r-action').value) : undefined;
+    var action = document.getElementById('r-action').value; // string; only T119/TD165 use it
 
     var rawData = '';
     for (var s = sf; s <= st; s++)
