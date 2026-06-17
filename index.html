@@ -153,6 +153,10 @@
           <label for="r-action">Action:</label>
           <select id="r-action"></select>
         </div>
+        <div>
+          <label for="r-repeat">Repeat (&times;):</label>
+          <input type="number" id="r-repeat" min="1" value="10" placeholder="10">
+        </div>
       </div>
     </div>
     <div class="grid">
@@ -161,7 +165,7 @@
       <div></div>
     </div>
     <textarea class="preview hidden" id="raw-preview" readonly></textarea>
-    <footer>This combo raw file will call multiple pagers in one shot.</footer>
+    <footer>Calls multiple pagers in one shot. <strong>Repeat</strong> = how many times each call is sent (default 10). For a single pager sent N times, set the from/to fields equal.</footer>
   </article>
 
   <!-- ============ SPECIAL FILE ============ -->
@@ -258,9 +262,9 @@
       keyHex: function (station, pager, action) {
         return binToHex(reverse(decToBin(station, 13)) + reverse(decToBin(pager, 10)) + reverse(decToBin(action, 1)));
       },
-      rawPair: function (s, p, action) {
+      rawPair: function (s, p, action, repeats) {
         var bin = encManchester(reverse(decToBin(s, 13)) + reverse(decToBin(p, 10)) + reverse(decToBin(action, 1)), 0);
-        return genRawData(200, 600, 10, bin) + genRawData(300, 800, 10, bin);
+        return genRawData(200, 600, repeats, bin) + genRawData(300, 800, repeats, bin);
       },
       specialKey: function (station) { return this.keyHex(station, 1005, 0); }
     },
@@ -289,9 +293,9 @@
       keyHex: function (station, pager, actionBits) {
         return binToHex(decToBin(station, 10) + decToBin(pager, 10) + (actionBits || this.keyAction));
       },
-      rawPair: function (s, p) {
+      rawPair: function (s, p, action, repeats) {
         var bin = encManchester(decToBin(s, 10) + decToBin(p, 10) + this.keyAction, 0);
-        return genRawData(200, 600, 10, bin);
+        return genRawData(200, 600, repeats, bin);
       },
       specialKey: function (station) { return this.keyHex(station, 999, this.turnoffAction); }
     },
@@ -316,9 +320,9 @@
       keyHex: function (station, pager, action) {
         return binToHex(reverse(decToBin(station, 13)) + reverse(decToBin(pager, 10)) + reverse(decToBin(action, 1)));
       },
-      rawPair: function (s, p, action) {
+      rawPair: function (s, p, action, repeats) {
         var bin = encManchester(reverse(decToBin(s, 13)) + reverse(decToBin(p, 10)) + reverse(decToBin(action, 1)), 0);
-        return genRawData(200, 600, 10, bin) + genRawData(300, 800, 10, bin);
+        return genRawData(200, 600, repeats, bin) + genRawData(300, 800, repeats, bin);
       },
       specialKey: function (station) { return this.keyHex(station, 1005, 0); }
     },
@@ -345,9 +349,9 @@
       keyHex: function (station, pager, action) {
         return binToHex(reverse(decToBin(station, 13)) + reverse(decToBin(action || 0, 2)) + reverse(decToBin(pager, 8)) + '0');
       },
-      rawPair: function (s, p) {
+      rawPair: function (s, p, action, repeats) {
         var bin = '01' + encManchester(reverse(decToBin(s, 13)) + reverse(decToBin(0, 2)) + reverse(decToBin(p, 8)), 0);
-        return genRawData(300, 900, 10, bin);
+        return genRawData(300, 900, repeats, bin);
       },
       specialKey: function (station) { return this.keyHex(station, 237, 3); }
     }
@@ -482,6 +486,11 @@
     }
   }
 
+  /* ---------- filename helpers (FAT-safe: no spaces or \ / : * ? " < > |) ---------- */
+  function modelToken(m) { return m.name.replace('Retekess ', ''); }           // e.g. "T119"
+  function actionToken(m, val) { return m.actionName(val).split(' ')[0].toLowerCase(); } // "ring" / "call" ...
+  function rng(a, b) { return a === b ? ('' + a) : (a + '-' + b); }            // "5" or "1-100"
+
   /* ---------- GENERATE: key ---------- */
   function genKeyFile() {
     var station = Number(document.getElementById('k-station').value);
@@ -490,7 +499,7 @@
 
     var hex = current.keyHex(station, pager, action);
     var content = keyFile(current, hex);
-    var name = current.hasAction ? (station + '-' + pager + '-' + action) : (station + '-' + pager);
+    var name = modelToken(current) + '_st' + station + '_pg' + pager + '_' + actionToken(current, action);
     showPreview('key-preview', content);
     download(content, name + '.sub');
   }
@@ -502,14 +511,16 @@
     var pf = Number(document.getElementById('r-pager-from').value);
     var pt = Number(document.getElementById('r-pager-to').value);
     var action = document.getElementById('r-action').value; // string; only T119/TD165 use it
+    var repeats = Math.max(1, Number(document.getElementById('r-repeat').value) || 10);
 
     var rawData = '';
     for (var s = sf; s <= st; s++)
       for (var p = pf; p <= pt; p++)
-        rawData += current.rawPair(s, p, action);
+        rawData += current.rawPair(s, p, action, repeats);
 
     var content = rawFileHeader(current.freq) + rawData;
-    var name = sf + '_' + st + '-' + pf + '_' + pt + (current.hasAction ? ('-' + action) : '');
+    var name = modelToken(current) + '_st' + rng(sf, st) + '_pg' + rng(pf, pt) +
+               '_' + actionToken(current, action) + '_x' + repeats;
     showPreview('raw-preview', content);
     download(content, name + '.sub');
   }
@@ -519,8 +530,9 @@
     var station = Number(document.getElementById('s-station').value);
     var hex = current.specialKey(station);
     var content = keyFile(current, hex);
+    var name = modelToken(current) + '_st' + station + '_' + current.special.suffix;
     showPreview('special-preview', content);
-    download(content, station + '-' + current.special.suffix + '.sub');
+    download(content, name + '.sub');
   }
 
   function showPreview(elId, content) {
