@@ -78,12 +78,18 @@
     <div id="decode-results" class="hidden">
       <table id="decode-table">
         <thead>
-          <tr><th>Model</th><th>Station</th><th>Pager</th><th>Action</th><th></th></tr>
+          <tr><th>Model</th><th>Station</th><th>Pager</th><th>Action</th><th>Signal fingerprint</th><th></th></tr>
         </thead>
         <tbody id="decode-tbody"></tbody>
       </table>
     </div>
-    <footer>Paste the hex key once — it's decoded under every model's format at the same time. Hit <strong>Use</strong> on a row to load those numbers into the generators below.</footer>
+    <footer>
+      Every row decodes the same bits — the numbers alone can't tell you the model.
+      <strong>Match the "Signal fingerprint" against your Flipper read screen</strong>
+      (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values) to know which pager you have,
+      then hit <strong>Use</strong> on that row to load it into the generators.
+      <br><small>Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — they're indistinguishable; pick your physical model.</small>
+    </footer>
   </article>
 
   <!-- ============ KEY FILE ============ -->
@@ -377,6 +383,12 @@
   var MODEL_ORDER = ['t119', 'td157', 'td165', 'td174'];
   var lastHex = null;
 
+  // What the Flipper read screen shows for this model — used to identify the real pager.
+  function fingerprint(m) {
+    var mhz = (m.freq / 1e6).toFixed(3).replace(/\.?0+$/, '');
+    return mhz + ' MHz &middot; ' + m.protocol + ' ' + m.bit + 'bit &middot; TE ' + m.te;
+  }
+
   function decode() {
     var hex = document.getElementById('hex-key').value.toString().trim();
     var results = document.getElementById('decode-results');
@@ -393,6 +405,7 @@
         '<td>' + n.station + '</td>' +
         '<td>' + n.pager + '</td>' +
         '<td>' + (n.action !== undefined ? n.action : '&mdash;') + '</td>' +
+        '<td><small>' + fingerprint(m) + '</small></td>' +
         '<td style="text-align:right"><button class="outline" style="margin:0;padding:.1rem .6rem" ' +
           'onclick="useDecoded(\'' + id + '\')">Use &#9656;</button></td>' +
       '</tr>';
