@@ -201,23 +201,17 @@
       <button id="fz-connect" onclick="flipperToggle()">Connect Flipper</button>
       <button id="fz-send" onclick="flipperSend()" disabled>Generate a file first</button>
     </div>
-    <div class="grid">
-      <div></div>
-      <button id="fz-tx" onclick="flipperTransmit()" disabled>▶ Transmit last upload</button>
-      <div></div>
-    </div>
     <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
     <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
     <footer>
       <details>
         <summary>Read me before using</summary>
-        Writes the last generated file straight to <code>/ext/subghz/pagger/</code> on your Flipper over BLE (the folder is created if missing).
+        Writes the last generated file straight to <code>/ext/subghz/pagger/</code> on your Flipper over BLE (the folder is created if missing),
+        so you don't need a cable or manual import. Open it afterwards on the device: <strong>Sub-GHz → Saved → pagger</strong>.
         <strong>Android Chrome only</strong> (Web Bluetooth) — not available on iOS browsers.
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
-        then tap Connect and pick your Flipper. After sending, <strong>Transmit</strong> opens the file in the
-        Sub-GHz app and sends it (it briefly takes over the Flipper screen) — for this the Flipper must be on
-        the <strong>desktop with no app open</strong> (the loader runs one app at a time). This is experimental — if it fails,
-        the log shows why; the Download button always works as a fallback (import via the Flipper app or USB).
+        then tap Connect and pick your Flipper. This is experimental — if it fails, the log shows why; the
+        Download button always works as a fallback.
       </details>
     </footer>
   </article>
@@ -582,7 +576,7 @@
     RX:      '19ed82ae-ed21-4c9d-4145-228e62fe0000', // write   (us -> flipper)
     FLOW:    '19ed82ae-ed21-4c9d-4145-228e63fe0000', // notify  (rx buffer credit)
     device: null, rx: null, credit: 1024, buff: 1024, creditWaiters: [],
-    rxbuf: new Uint8Array(0), waiters: []
+    rxbuf: new Uint8Array(0)
   };
   var lastFile = null;
 
@@ -599,8 +593,6 @@
     if (!send) return;
     var connected = !!(FZ.device && FZ.device.gatt && FZ.device.gatt.connected);
     send.disabled = !(connected && lastFile);
-    var tx = document.getElementById('fz-tx');
-    if (tx) { tx.disabled = !(connected && FZ.lastPath); tx.textContent = FZ.lastPath ? ('▶ Transmit ' + FZ.lastPath.split('/').pop()) : '▶ Transmit last upload'; }
     document.getElementById('fz-connect').textContent = connected ? 'Disconnect' : 'Connect Flipper';
     document.getElementById('fz-status').textContent =
       (navigator.bluetooth ? (connected ? 'Connected' + (FZ.name ? ' to ' + FZ.name : '') : 'Not connected')
@@ -643,7 +635,6 @@
 
   function waitCredit() { return new Promise(function (res) { FZ.creditWaiters.push(res); }); }
   function grantCredit(v) { FZ.credit = v; var w = FZ.creditWaiters; FZ.creditWaiters = []; w.forEach(function (r) { r(); }); }
-  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   // stream raw RPC bytes to the Flipper, paced by flow-control credit (20-byte ATT writes)
   async function flipperWrite(bytes) {
@@ -654,54 +645,6 @@
       await FZ.rx.writeValueWithoutResponse(bytes.slice(off, off + n));
       off += n; FZ.credit -= n;
     }
-  }
-
-  // ---- App-control RPC frames (used to load + transmit a saved .sub) ----
-  function buildAppFrame(fieldNum, body, cmdId) {
-    var main = pbVar(1, cmdId).concat(pbBytes(fieldNum, body));
-    return pbVarint(main.length).concat(main);
-  }
-  function appStart(name)   { return buildAppFrame(16, pbBytes(1, utf8(name)).concat(pbBytes(2, utf8('RPC'))), 10); } // args "RPC" → RPC mode
-  function appLoadFile(path){ return buildAppFrame(48, pbBytes(1, utf8(path)), 11); }
-  function appButtonPress() { return buildAppFrame(49, [], 12); }   // empty AppButtonPressRequest → start TX
-  function appButtonRelease(){ return buildAppFrame(50, [], 13); }  // stop TX
-  function appExit()        { return buildAppFrame(47, [], 14); }
-
-  async function safeExit() { try { await flipperWrite(Uint8Array.from(appExit())); } catch (e) {} }
-
-  async function flipperTransmit() {
-    if (!FZ.rx || !FZ.lastPath) return;
-    try {
-      flog('▶ Launching Sub-GHz (RPC mode)… (Flipper must be on the desktop, no app open)');
-      // register both waiters BEFORE writing so we can't miss a fast APP_STARTED
-      var startedP = waitForRpc(function (m) { return m.appState === 1; }, 8000).catch(function () { return null; });
-      var ackP = waitForRpc(function (m) { return m.cmd === 10; }, 5000).catch(function () { return null; });
-      await flipperWrite(Uint8Array.from(appStart('Sub-GHz')));
-      var ack = await ackP;
-      if (ack && ack.status !== 0) {
-        flog(ack.status === 17
-          ? '✗ Another app is open on the Flipper. Press Back to return to the desktop, then Transmit again.'
-          : '✗ Launch was refused (status ' + ack.status + '). Put the Flipper on the desktop and retry.');
-        return;
-      }
-      if (!(await startedP)) {
-        flog('✗ Sub-GHz did not start. Make sure the Flipper is on the desktop (no app open) and retry.');
-        return;
-      }
-      flog('App started. Loading ' + FZ.lastPath);
-      var loadP = waitForRpc(function (m) { return m.cmd === 11; }, 6000).catch(function () { return null; });
-      await flipperWrite(Uint8Array.from(appLoadFile(FZ.lastPath)));
-      var load = await loadP;
-      if (!load) { flog('✗ No load response (file missing/locked?). Aborting before transmit.'); await safeExit(); return; }
-      if (load.status !== 0) { flog('✗ Load failed (status ' + load.status + '): file may be corrupt or unsupported. Aborting.'); await safeExit(); return; }
-      flog('File loaded OK. Transmitting…');
-      await flipperWrite(Uint8Array.from(appButtonPress()));
-      await sleep(2500);                                   // hold "send" so the burst repeats
-      await flipperWrite(Uint8Array.from(appButtonRelease()));
-      await sleep(300);
-      await flipperWrite(Uint8Array.from(appExit()));
-      flog('✓ Transmit sequence complete.');
-    } catch (err) { flog('Transmit failed: ' + err.message); }
   }
 
   async function flipperConnect() {
@@ -715,7 +658,7 @@
         acceptAllDevices: true, optionalServices: [FZ.SERVICE]
       });
       FZ.name = FZ.device.name;
-      FZ.rxbuf = new Uint8Array(0); FZ.waiters = [];
+      FZ.rxbuf = new Uint8Array(0);
       FZ.device.addEventListener('gattserverdisconnected', function () { flog('Disconnected.'); flipperUi(); });
       flog('Connecting GATT…');
       var server = await FZ.device.gatt.connect();
@@ -747,18 +690,12 @@
   function readVarint(d, i) { var v = 0, sh = 0; while (i < d.length) { var by = d[i++]; v |= (by & 0x7f) << sh; sh += 7; if (!(by & 0x80)) break; } return [v >>> 0, i]; }
 
   function parseMain(d) {
-    var i = 0, out = { cmd: 0, status: 0, tag: 0, appState: null };
+    var i = 0, out = { cmd: 0, status: 0 };
     while (i < d.length) {
       var k = readVarint(d, i); i = k[1]; var field = k[0] >> 3, wire = k[0] & 7;
       if (wire === 0) { var v = readVarint(d, i); i = v[1]; if (field === 1) out.cmd = v[0]; else if (field === 2) out.status = v[0]; }
-      else if (wire === 2) {
-        var L = readVarint(d, i); i = L[1]; var sub = d.slice(i, i + L[0]); i += L[0]; out.tag = field;
-        if (field === 58) { // app_state_response { state = 1 }
-          var j = 0; while (j < sub.length) { var kk = readVarint(sub, j); j = kk[1]; var f2 = kk[0] >> 3, w2 = kk[0] & 7;
-            if (w2 === 0) { var vv = readVarint(sub, j); j = vv[1]; if (f2 === 1) out.appState = vv[0]; }
-            else if (w2 === 2) { var LL = readVarint(sub, j); j = LL[1]; j += LL[0]; } else break; }
-        }
-      } else if (wire === 5) { i += 4; } else if (wire === 1) { i += 8; } else break;
+      else if (wire === 2) { var L = readVarint(d, i); i = L[1]; i += L[0]; }
+      else if (wire === 5) { i += 4; } else if (wire === 1) { i += 8; } else break;
     }
     return out;
   }
@@ -776,16 +713,7 @@
   }
 
   function onRpcMessage(m) {
-    if (m.appState !== null) flog('  ← app ' + (m.appState === 1 ? 'STARTED' : m.appState === 0 ? 'CLOSED' : m.appState));
-    else flog('  ← cmd ' + m.cmd + ' status ' + m.status + (m.status === 0 ? ' (OK)' : m.status === 6 ? ' (exists, ok)' : ' (error)'));
-    FZ.waiters = FZ.waiters.filter(function (w) { if (w.test(m)) { clearTimeout(w.timer); w.resolve(m); return false; } return true; });
-  }
-
-  function waitForRpc(test, ms) {
-    return new Promise(function (res, rej) {
-      var t = setTimeout(function () { FZ.waiters = FZ.waiters.filter(function (w) { return w.timer !== t; }); rej(new Error('timeout')); }, ms);
-      FZ.waiters.push({ test: test, resolve: res, timer: t });
-    });
+    flog('  ← cmd ' + m.cmd + ' status ' + m.status + (m.status === 0 ? ' (OK)' : m.status === 6 ? ' (exists, ok)' : ' (error)'));
   }
 
   async function flipperSend() {
@@ -804,9 +732,8 @@
         stream = stream.concat(buildWriteMain(path, chunk, (o + DATA) < data.length, 2));
       }
       await flipperWrite(Uint8Array.from(stream));
-      FZ.lastPath = path;
       flog('Sent ' + Uint8Array.from(stream).length + ' bytes → ' + path);
-      flipperUi();
+      flog('Open it on the Flipper: Sub-GHz → Saved → pagger.');
     } catch (err) { flog('Send failed: ' + err.message); }
   }
 
