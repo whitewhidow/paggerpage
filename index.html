@@ -42,6 +42,19 @@
     .readout { font-family: monospace; background: var(--code-background-color); padding: .5rem .75rem; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
     textarea.preview { font-family: monospace; font-size: 12px; min-height: 9rem; white-space: pre; overflow-wrap: normal; }
     .hidden { display: none !important; }
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 3.25rem);
+      grid-template-rows: repeat(3, 3.25rem);
+      gap: .4rem; justify-content: center; margin: .6rem auto;
+      grid-template-areas: ".  up  ." "left ok right" ".  down back";
+    }
+    .dpad button { margin: 0; padding: 0; width: 100%; height: 100%; border-radius: 12px; font-size: 1.2rem; line-height: 1; }
+    .dpad .up { grid-area: up; } .dpad .down { grid-area: down; }
+    .dpad .left { grid-area: left; } .dpad .right { grid-area: right; }
+    .dpad .ok { grid-area: ok; border-radius: 50%; }
+    .dpad .back { grid-area: back; }
+    .fz-wide { display: block; margin: 0 auto; max-width: 320px; }
     tr.ruled-out { opacity: .5; }
     td.bad { color: #d32f2f; font-weight: 700; }
     .xmark { color: #d32f2f; font-weight: 700; margin-left: .25rem; }
@@ -207,15 +220,17 @@
       <div></div>
     </div>
     <canvas id="fz-screen" width="512" height="256" style="image-rendering:pixelated;border-radius:8px;width:100%;max-width:512px;margin:.5rem auto 0;display:none"></canvas>
-    <div id="fz-controls" style="display:none;max-width:300px;margin:.6rem auto 0">
-      <div class="grid"><div></div><button class="contrast" onclick="startSubghz()">Open Sub-GHz app</button><div></div></div>
-      <div class="grid"><div></div><button onclick="tap(0)">▲</button><div></div></div>
-      <div class="grid"><button onclick="tap(3)">◀</button><button onclick="tap(4)">OK</button><button onclick="tap(2)">▶</button></div>
-      <div class="grid"><div></div><button onclick="tap(1)">▼</button><div></div></div>
-      <div class="grid">
-        <button class="secondary" onclick="tap(5)">Back</button>
-        <button id="fz-hold" style="touch-action:none;user-select:none" onpointerdown="holdStart(4)" onpointerup="holdEnd(4)" onpointerleave="holdEnd(4)" onpointercancel="holdEnd(4)">Hold OK = send</button>
+    <div id="fz-controls" style="display:none;margin:.6rem auto 0;text-align:center">
+      <button class="contrast fz-wide" onclick="startSubghz()">Open Sub-GHz app</button>
+      <div class="dpad">
+        <button class="up"    onclick="tap(0)">▲</button>
+        <button class="left"  onclick="tap(3)">◀</button>
+        <button class="ok"    onclick="tap(4)">OK</button>
+        <button class="right" onclick="tap(2)">▶</button>
+        <button class="down"  onclick="tap(1)">▼</button>
+        <button class="back secondary" onclick="tap(5)">↩</button>
       </div>
+      <button id="fz-hold" class="fz-wide" onclick="sendHold()">Send (hold OK 2s)</button>
     </div>
     <p style="text-align:center;margin:.4rem 0"><small id="fz-status">—</small></p>
     <pre id="fz-log" style="font-family:monospace;font-size:11px;height:8rem;overflow:auto;background:var(--code-background-color);padding:.5rem;border-radius:6px;white-space:pre-wrap"></pre>
@@ -228,8 +243,8 @@
         <strong>First disconnect the official Flipper app</strong> (only one app can hold the Bluetooth link),
         then tap Connect and pick your Flipper. <strong>Mirror screen</strong> shows the Flipper's live display here,
         with a D-pad to drive it remotely (arrows + OK + Back). To transmit, open the file on the device and
-        <strong>press &amp; hold "Hold OK = send"</strong> on the Sub-GHz send screen — this works for RAW files too,
-        because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
+        tap <strong>"Send (hold OK 2s)"</strong> on the Sub-GHz send screen — it holds OK for ~2s then releases,
+        which works for RAW files too, because the device's own app does the transmit. This is experimental — if it fails, the log shows why; the
         Download button always works as a fallback.
       </details>
     </footer>
@@ -698,8 +713,19 @@
     await flipperWrite(Uint8Array.from(buildInput(key, 2)));  // SHORT
     await flipperWrite(Uint8Array.from(buildInput(key, 1)));  // RELEASE
   }
-  async function holdStart(key) { if (FZ.rx) await flipperWrite(Uint8Array.from(buildInput(key, 0))); } // PRESS (hold)
-  async function holdEnd(key)   { if (FZ.rx) await flipperWrite(Uint8Array.from(buildInput(key, 1))); } // RELEASE
+  // transmit = a single clean OK press, held ~2s, then released (no double events)
+  var fzHolding = false;
+  async function sendHold() {
+    if (!FZ.rx || fzHolding) return;
+    fzHolding = true;
+    flog('OK held — transmitting ~2s…');
+    try {
+      await flipperWrite(Uint8Array.from(buildInput(4, 0)));   // OK PRESS
+      await new Promise(function (r) { setTimeout(r, 2000); });
+      await flipperWrite(Uint8Array.from(buildInput(4, 1)));   // OK RELEASE
+      flog('Released OK.');
+    } finally { fzHolding = false; }
+  }
 
   // launch an app by name (empty args = normal app/menu, not headless RPC mode)
   function buildAppStart(name) {
