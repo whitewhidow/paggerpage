@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
-  <title>Pagger - All In One (Retekess T119 / TD157 / TD165 / TD174)</title>
+  <title>Pagger - All In One (Retekess T119 / TD157 / TD163 / TD165 / TD174)</title>
 
   <!-- favicon / home-screen icon (pager glyph) -->
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
@@ -69,7 +69,7 @@
 
   <header>
     <h1 class="title">PAGGER · ALL IN ONE</h1>
-    <p>Decode &amp; generate Flipper Zero <code>.sub</code> files for Retekess T119 / TD157 / TD165 / TD174 pagers.</p>
+    <p>Decode &amp; generate Flipper Zero <code>.sub</code> files for Retekess T119 / TD157 / TD163 / TD165 / TD174 pagers.</p>
   </header>
 
   <!-- ============ SEND TO FLIPPER (BLE, experimental) ============ -->
@@ -124,7 +124,7 @@
       <div></div>
       <div>
         <label for="hex-key">Hex key:</label>
-        <input name="hex-key" id="hex-key" placeholder="00AABB" minlength="6" maxlength="6" oninput="decode()">
+        <input name="hex-key" id="hex-key" placeholder="00AABB" minlength="6" maxlength="7" oninput="decode()">
       </div>
       <div></div>
     </div>
@@ -145,8 +145,12 @@
         For the rest, <strong>match the "Signal fingerprint" against your Flipper read screen</strong>
         (its <em>Frequency</em>, <em>Protocol/Bit</em>, and <em>Te</em> values), then hit
         <strong>Use</strong> on the right row to load it into the generator.
-        <br><small>Real pager capacity: T119 1–999 · TD157 1–998 · TD165 1–999 · TD174 1–10.
-        Note: 433.92&nbsp;MHz · Princeton 24bit · TE&nbsp;271 fits both T119 and TD165 — pick your physical model.</small>
+        <br><small>Real pager capacity: T119 1–999 · TD157 1–998 · TD163 1–998* · TD165 1–999 · TD174 1–10.
+        <br><strong>TD163 is provisional</strong>: protocol SMC5326 · 25bit · TE&nbsp;~213; layout decoded as
+        13-bit station / 7-bit pager / fixed framing. The 7-bit pager is only confirmed for low numbers —
+        Retekess rates the TD163 to 998, which needs a wider field, so high pager numbers aren't trustworthy
+        yet (need a known high-number capture to confirm). TD165/TD174 share TE&nbsp;326 but split by protocol
+        (Princeton vs SMC5326).</small>
       </details>
     </footer>
   </article>
@@ -161,6 +165,7 @@
         <select id="model-select" onchange="selectModel()">
           <option value="t119">Retekess T119</option>
           <option value="td157">Retekess TD157</option>
+          <option value="td163">Retekess TD163</option>
           <option value="td165">Retekess TD165</option>
           <option value="td174">Retekess TD174</option>
         </select>
@@ -267,7 +272,13 @@
     return res;
   }
   function binToDec(bits) { return parseInt(bits, 2); }
-  function hexToBin(hex)  { return (parseInt(hex, 16).toString(2)).toUpperCase().padStart(24, '0'); }
+  // width defaults to 24; pass 25 for SMC5326 25-bit models (TD163/TD174). The
+  // mask keeps a too-long input from spilling extra high bits into a model's fields.
+  function hexToBin(hex, width)  {
+    width = width || 24;
+    var mask = (width >= 25) ? 0x1FFFFFF : 0xFFFFFF;
+    return ((parseInt(hex, 16) & mask).toString(2)).toUpperCase().padStart(width, '0');
+  }
   function binToHex(bits) { return parseInt(bits, 2).toString(16).toUpperCase().padStart(6, '0'); }
   function reverse(bits)  { return bits.split('').reverse().join(''); }
 
@@ -371,7 +382,9 @@
     },
 
     td165: {
-      name: 'Retekess TD165', freq: 433920000, protocol: 'Princeton', bit: 24, te: 271,
+      // te corrected 271 -> 326: verified against real UberGuidoZ TD165 captures
+      // (all Princeton/24-bit/TE 326). The 271 here was inherited from upstream.
+      name: 'Retekess TD165', freq: 433920000, protocol: 'Princeton', bit: 24, te: 326,
       hasAction: true,
       ranges: { station: [0, 8191], pager: [0, 999], action: [0, 1] },
       realPager: [1, 999], // hardware: up to 999 pagers
@@ -426,6 +439,45 @@
         return genRawData(300, 900, repeats, bin);
       },
       specialKey: function (station) { return this.keyHex(station, this.special.pager, this.special.action); }
+    },
+
+    // Retekess TD163 — SMC5326, 25-bit, TE ~213, 433.92 MHz. Layout reverse-
+    // engineered and verified this session against the UberGuidoZ TD163 captures:
+    //   13-bit station / 7-bit pager (straight binary) / 5-bit fixed framing 00100.
+    // PROVISIONAL pager width: validated only for low pager numbers. Retekess lists
+    // capacities up to 998 (which would need >=10 bits), so a high-numbered real
+    // capture is still needed to confirm the field is really 7 bits. RAW transmit
+    // timing isn't verified, so generation emits a decoded Key file (genMode 'key'),
+    // which the Flipper transmits directly via its SMC5326 protocol.
+    td163: {
+      name: 'Retekess TD163', freq: 433920000, protocol: 'SMC5326', bit: 25, te: 213,
+      genMode: 'key',
+      parseBits: 25, // decode at full 25 bits (TD174 keeps the legacy 24-bit decode)
+      hasAction: false,
+      ranges: { station: [0, 8191], pager: [0, 127] },
+      realPager: [1, 127],
+      actionOptions: [{ value: '00100', label: 'Call (fixed)' }],
+      actionName: function (bits) { return bits === '00100' ? 'Call' : 'bits ' + bits; },
+      validActions: ['00100'],
+      special: { label: 'TURN-OFF (NOT VERIFIED)', suffix: 'pager0', pager: 0, action: '00100',
+                 pagerText: '0  (placeholder)', actionText: '00100  (normal call framing)',
+                 info: 'No turn-off/cancel command has been reverse-engineered for the TD163 yet. This button just sends a NORMAL call to pager 0 — it is NOT a verified broadcast/turn-off. Capture a real cancel press and we can add the proper code.' },
+      decode: function (bin) {
+        return {
+          station: binToDec(bin.substring(0, 13)),
+          pager:   binToDec(bin.substring(13, 20)),
+          action:  bin.substring(20, 25)
+        };
+      },
+      keyHex: function (station, pager) {
+        return binToHex(decToBin(station, 13) + decToBin(pager, 7) + '00100');
+      },
+      rawPair: function (s, p) {
+        // Unused while genMode is 'key'; kept for completeness with best-effort timing.
+        var bin = encManchester(decToBin(s, 13) + decToBin(p, 7) + '00100', 0);
+        return genRawData(213, 639, 1, bin);
+      },
+      specialKey: function (station) { return this.keyHex(station, this.special.pager); }
     }
   };
 
@@ -486,7 +538,7 @@
   }
 
   /* ---------- DECODE (one key, decoded under every model) ---------- */
-  var MODEL_ORDER = ['t119', 'td157', 'td165', 'td174'];
+  var MODEL_ORDER = ['t119', 'td157', 'td163', 'td165', 'td174'];
   var lastHex = null;
 
   // What the Flipper read screen shows for this model — used to identify the real pager.
@@ -498,14 +550,13 @@
   function decode() {
     var hex = document.getElementById('hex-key').value.toString().trim();
     var results = document.getElementById('decode-results');
-    if (!/^[0-9a-fA-F]{6}$/.test(hex)) { results.classList.add('hidden'); lastHex = null; return; }
+    if (!/^[0-9a-fA-F]{6,7}$/.test(hex)) { results.classList.add('hidden'); lastHex = null; return; }
     lastHex = hex;
-    var bin = hexToBin(hex);
 
     var rows = '';
     MODEL_ORDER.forEach(function (id) {
       var m = MODELS[id];
-      var n = m.decode(bin);
+      var n = m.decode(hexToBin(hex, m.parseBits || 24)); // 25 only for TD163; others stay 24
       var rp = m.realPager;
       var pagerBad = (n.pager < rp[0] || n.pager > rp[1]);          // outside real pager capacity → impossible
       var actionBad = !!m.validActions && (m.validActions.indexOf(n.action) === -1);  // action bits this hardware never sends → impossible
@@ -535,7 +586,7 @@
     if (!lastHex) return;
     document.getElementById('model-select').value = id;
     selectModel();
-    var n = MODELS[id].decode(hexToBin(lastHex));
+    var n = MODELS[id].decode(hexToBin(lastHex, MODELS[id].parseBits || 24));
 
     // single decoded pager → station + pager from/to all set to that one value
     document.getElementById('r-station-from').value = n.station;
@@ -569,6 +620,19 @@
     var pt = Number(document.getElementById('r-pager-to').value);
     var action = document.getElementById('r-action').value; // string; only T119/TD165 use it
     var repeats = Math.max(1, Number(document.getElementById('r-repeat').value) || 10);
+
+    // genMode 'key' (TD163): RAW timing isn't verified, so emit a decoded SMC5326
+    // Key file. A decoded key holds a single code, so we generate for the single
+    // (station-from, pager-from) pair; the Flipper TXes it via its SMC5326 protocol.
+    if (current.genMode === 'key') {
+      var hexK = current.keyHex(sf, pf, action);
+      var contentK = keyFile(current, hexK);
+      var nameK = modelToken(current) + '_st' + sf + '_pg' + pf;
+      showPreview('raw-preview', contentK);
+      rememberFile(nameK + '.sub', contentK);
+      download(contentK, nameK + '.sub');
+      return;
+    }
 
     var rawData = '';
     for (var s = sf; s <= st; s++)
